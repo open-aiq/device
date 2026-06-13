@@ -192,7 +192,10 @@ void setup() {
 
   HTTPClient https;
 
-  if (https.begin(client, "https://api.ipify.org?format=json")) {
+  // NOTE: the '/' before '?' is required — HTTPClient's URL parser splits
+  // host/path at the first '/', so without it the query string becomes part
+  // of the hostname and DNS resolution fails.
+  if (https.begin(client, "https://api.ipify.org/?format=json")) {
 
     int code = https.GET();
 
