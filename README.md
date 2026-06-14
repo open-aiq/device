@@ -73,6 +73,51 @@ This is a [PlatformIO](https://platformio.org/) project.
 - WiFi credentials live in `include/secrets.h` (`WIFI_SSID`, `WIFI_PASSWORD`).
 - Board, monitor speed, and library dependencies are set in `platformio.ini`.
 
+## Build & release (Makefile)
+
+A `Makefile` wraps the common PlatformIO and release steps. The version and
+release notes are **inputs you pass on the command line** — they are not baked
+into the Makefile.
+
+| Target  | What it does                                                            |
+|---------|-------------------------------------------------------------------------|
+| `build` | Compile the firmware (`pio run`).                                        |
+| `merge` | Build, then merge bootloader + partitions + app into one flashable bin. |
+| `tag`   | Create and push a git tag (`VERSION` required).                         |
+| `release` | Build, merge, tag, and publish a GitHub release with the artifacts.   |
+| `clean` | Remove build artifacts.                                                 |
+
+### Release inputs
+
+| Variable     | Default            | Purpose                                                  |
+|--------------|--------------------|----------------------------------------------------------|
+| `VERSION`    | _(required)_       | Release/tag name, e.g. `v0.1.0`. No default — must be set.|
+| `NOTES_FILE` | `RELEASE_NOTES.md` | File whose contents become the release notes.            |
+| `NOTES`      | _(unset)_          | Inline release notes; overrides `NOTES_FILE` if given.   |
+| `PRERELEASE` | `true`             | Mark the GitHub release as a pre-release. Set `false` for a full release. |
+
+Inputs are validated up front (`check-release-inputs`), so a missing version or
+notes file fails immediately — before any git tag is pushed.
+
+### Examples
+
+```bash
+# Just build
+make build
+
+# Cut a pre-release, notes read from RELEASE_NOTES.md
+make release VERSION=v0.1.0
+
+# Notes from a specific file
+make release VERSION=v0.1.0 NOTES_FILE=notes/v0.1.0.md
+
+# Inline notes
+make release VERSION=v0.1.0 NOTES="Fixed BLE provisioning"
+
+# Full (non-pre) release
+make release VERSION=v1.0.0 PRERELEASE=false
+```
+
 ## Known issues / TODO
 
 - [ ] **Fix the HTTPClient URL-parser bug.** The query string is currently only
