@@ -1,0 +1,15 @@
+# C++ formatting for the firmware. Tuned to the existing style:
+# Allman braces, 2-space indent, right-aligned pointers, no forced line wrapping.
+Language: Cpp
+BasedOnStyle: Microsoft
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+PointerAlignment: Right
+ColumnLimit: 0
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+SortIncludes: false
+AlignConsecutiveMacros: true
+AlignTrailingComments: true

@@ -43,7 +43,9 @@ reports over WiFi.
 
 This is a [PlatformIO](https://platformio.org/) project.
 
-1. Copy the secrets template and fill in your WiFi details:
+1. Copy the secrets template and fill in your WiFi details and device
+   credentials (register a device against the backend to get `DEVICE_ID` and
+   the one-time `DEVICE_KEY`):
 
    ```bash
    cp include/secrets.example.h include/secrets.h
@@ -68,10 +70,69 @@ This is a [PlatformIO](https://platformio.org/) project.
    pio device monitor
    ```
 
-## Configuration
+## Configuration & provisioning
 
-- WiFi credentials live in `include/secrets.h` (`WIFI_SSID`, `WIFI_PASSWORD`).
+- Secrets live in `include/secrets.h`: `WIFI_SSID`, `WIFI_PASSWORD`,
+  `DEVICE_ID`, `DEVICE_KEY`, `MOCK_LAT`, `MOCK_LON`.
 - Board, monitor speed, and library dependencies are set in `platformio.ini`.
+- The backend base URL is `BACKEND_BASE_URL` in `include/config.h`
+  (default `https://backend-h5v6.onrender.com/api/v1`; override with a
+  `-DBACKEND_BASE_URL=...` build flag).
+
+### Provisioning (app vs. mock)
+
+The device is designed to be provisioned by a mobile app over BLE (Nordic UART
+service, advertised as `AirMonitor-Setup`) with line commands:
+
+```
+SSID:<name>  PASS:<secret>  LAT:<deg>  LON:<deg>  DEVID:<dev_...>  DEVKEY:<sk_...>
+SAVE   LOAD   CLEAR   PING   STATUS
+```
+
+Until the app exists, **mock app provisioning** stands in for it:
+`MOCK_APP_PROVISIONING` (default `1`, `include/config.h`) seeds the config from
+`secrets.h` on first boot — exactly the values the app would have sent — and
+saves them to flash. BLE provisioning stays fully functional and overwrites the
+mock values at any time. Set the flag to `0` once the real app ships.
+
+Mock provisioning only fires when flash is empty. After changing `secrets.h`,
+either send `CLEAR` over BLE or build once with `WIPE_CONFIG_ON_BOOT` set to
+`1` (`include/config.h`) — it wipes the saved config on every boot so the
+re-seed happens. Set it back to `0` afterwards, or the device forgets BLE
+provisioning on every restart.
+
+## Telemetry
+
+Every 10 minutes (first upload right after boot) the firmware POSTs the latest
+reading to `{BACKEND_BASE_URL}/data` with `X-Device-ID` / `X-Device-Key`
+headers:
+
+```json
+{
+  "pms_data":         { "pm1_0": 5, "pm2_5": 12, "pm10_0": 18, "provider": "pms5003" },
+  "aqi": 57,
+  "temperature_data": { "temperature": 31.2, "humidity": 64.5, "heat_index": 36.8, "provider": "dht22" },
+  "location":         { "lat": 24.8607, "lon": 67.0011, "provider": "mobile" }
+}
+```
+
+`location` is omitted while lat/lon are unset (0/0). Uploads are skipped (and
+logged) when WiFi is down, credentials are missing, or the reading is
+incomplete; the next tick retries. TLS currently uses `setInsecure()` — cert
+pinning is on the roadmap.
+
+## Display & buttons
+
+Three screens on the 16×2 LCD, refreshed with each 3 s sensor sample using
+fixed-width padded row writes (no flicker, no stale characters):
+
+1. **AQI** (home) — `AQI 54 Moderate` / `PM2.5 25ug/m3`
+2. **Climate** — `T 29.1C HI 33.5C` / `Humidity 61%`
+3. **Status** — `WiFi <ip>` or `WiFi DOWN` / `Up 201 3m ago`
+
+Buttons: **Right/Left** cycle screens, **Boot** returns to the AQI screen,
+**Settings** jumps to the status screen (a real settings menu is on the
+roadmap).
 
 ## Build & release (Makefile)
 
