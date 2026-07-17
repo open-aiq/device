@@ -7,10 +7,11 @@
 // ---------------------------------------------------------------------------
 // Telemetry uploader
 //
-// Sends one full sensor sample to the AIQ backend as
+// Sends one full sensor reading (in practice the current upload window's
+// average — see Aggregator in main.cpp) to the AIQ backend as
 // POST {BACKEND_BASE_URL}/data, authenticated with the device credentials in
 // `config` (X-Device-ID / X-Device-Key headers). The backend timestamps the
-// reading on arrival, so only current samples are uploaded — no backlog.
+// reading on arrival, so only current data is uploaded — no backlog.
 // ---------------------------------------------------------------------------
 
 // Outcome of one upload attempt. `httpCode` is the backend's HTTP status

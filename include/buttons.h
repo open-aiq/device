@@ -1,11 +1,16 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// Front-panel buttons (right / left / settings / boot)
+// Front-panel buttons (right / left)
 //
 // Each button is wired to a GPIO interrupt and debounced. setupButtons() must
 // run once in setup(); loop() polls nextButtonEvent() and acts on any presses
-// registered since the last call (one event per call, oldest first).
+// registered since the last call (one event per call).
+//
+// The Settings (GPIO36) and Boot (GPIO39) buttons are DISABLED: an ESP32
+// silicon erratum makes those RTC-domain pins glitch on every WiFi modem-sleep
+// wake, firing phantom interrupts constantly. Keeping WiFi power-save was
+// preferred over those buttons; rewire them to non-RTC pins to bring them back.
 // ---------------------------------------------------------------------------
 
 enum ButtonEvent
@@ -13,8 +18,6 @@ enum ButtonEvent
   BTN_NONE,
   BTN_RIGHT,
   BTN_LEFT,
-  BTN_SETTINGS,
-  BTN_BOOT,
 };
 
 // Configure the button pins and attach their interrupts.

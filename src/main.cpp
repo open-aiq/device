@@ -58,6 +58,77 @@ static bool haveReadings = false;
 static UploadResult lastUpload{false, 0};
 static uint32_t lastUploadAt = 0; // millis() of the last attempt; 0 = never
 
+// Accumulates samples between uploads so each sync sends the average of the
+// whole window rather than a spot reading. PM and TH are counted separately —
+// either sensor can fail a given read without spoiling the other's average.
+struct Aggregator
+{
+  uint32_t pmCount = 0;
+  uint32_t thCount = 0;
+  float pm01Sum = 0, pm25Sum = 0, pm10Sum = 0;
+  float tempSum = 0, humSum = 0, heatIndexSum = 0;
+
+  void add(const SensorReadings &r)
+  {
+    if (r.pm.ok)
+    {
+      pmCount++;
+      pm01Sum += r.pm.pm01;
+      pm25Sum += r.pm.pm25;
+      pm10Sum += r.pm.pm10;
+    }
+    if (r.th.ok)
+    {
+      thCount++;
+      tempSum += r.th.temperatureC;
+      humSum += r.th.humidity;
+      heatIndexSum += r.th.heatIndexC;
+    }
+  }
+
+  // True once both sensors contributed at least one good sample.
+  bool complete() const
+  {
+    return pmCount > 0 && thCount > 0;
+  }
+
+  void reset()
+  {
+    *this = Aggregator{};
+  }
+
+  // The window average, shaped as one SensorReadings. The AQI is recomputed
+  // from the averaged concentrations — averaging the index itself would be
+  // wrong, since AQI is a nonlinear (piecewise) function of concentration.
+  SensorReadings mean() const
+  {
+    SensorReadings r{};
+
+    r.pm.sensor = "PMS5003";
+    r.pm.ok = pmCount > 0;
+    if (r.pm.ok)
+    {
+      r.pm.pm01 = (uint16_t)lroundf(pm01Sum / pmCount);
+      r.pm.pm25 = (uint16_t)lroundf(pm25Sum / pmCount);
+      r.pm.pm10 = (uint16_t)lroundf(pm10Sum / pmCount);
+      r.aqi = computeUsAqi(r.pm.pm25, r.pm.pm10);
+    }
+
+    r.th.sensor = "DHT22";
+    r.th.ok = thCount > 0;
+    if (r.th.ok)
+    {
+      r.th.temperatureC = tempSum / thCount;
+      r.th.humidity = humSum / thCount;
+      r.th.heatIndexC = heatIndexSum / thCount;
+    }
+
+    return r;
+  }
+};
+
+static Aggregator uploadWindow;
+
 // Render the current screen from the latest known state. Uses fixed-width row
 // writes (Display::showLines), so frequent redraws don't flicker or leave
 // stale characters behind.
@@ -111,9 +182,8 @@ static void renderScreen()
   }
 }
 
-// Apply one button press to the screen state. Right/Left cycle, Boot returns
-// home, Settings jumps to the status screen (a real settings menu is on the
-// roadmap).
+// Apply one button press to the screen state: Right/Left cycle through all
+// screens. (Settings/Boot are disabled — see buttons.h.)
 static void handleButton(ButtonEvent event)
 {
   switch (event)
@@ -123,12 +193,6 @@ static void handleButton(ButtonEvent event)
     break;
   case BTN_LEFT:
     currentScreen = static_cast<Screen>((currentScreen + SCREEN_COUNT - 1) % SCREEN_COUNT);
-    break;
-  case BTN_BOOT:
-    currentScreen = SCREEN_AQI;
-    break;
-  case BTN_SETTINGS:
-    currentScreen = SCREEN_STATUS;
     break;
   default:
     return;
@@ -197,10 +261,12 @@ void setup()
   renderScreen();
 }
 
-// How often to sample the sensors (drives the display refresh).
-static const uint32_t SENSOR_INTERVAL_MS = 3000;
-// How often to upload a reading. 10 min = half the backend's 20-minute offline
-// threshold, so one missed upload doesn't flip the device to "offline".
+// How often to sample the sensors (drives the display refresh and feeds the
+// upload window — ~30 samples per upload).
+static const uint32_t SENSOR_INTERVAL_MS = 20 * 1000;
+// How often to upload the window average. 10 min = half the backend's
+// 20-minute offline threshold, so one missed upload doesn't flip the device
+// to "offline".
 static const uint32_t UPLOAD_INTERVAL_MS = 10 * 60 * 1000;
 
 // True once `intervalMs` has elapsed since the last time it returned true for
@@ -223,11 +289,13 @@ static bool intervalElapsed(uint32_t &lastFired, uint32_t intervalMs, bool fireI
   return true;
 }
 
-// Read every sensor once, log the results and refresh the display.
+// Read every sensor once, log the results, feed the upload window and refresh
+// the display (which always shows the latest instantaneous sample).
 static void sampleSensors()
 {
   lastReadings = sensors.read();
   haveReadings = true;
+  uploadWindow.add(lastReadings);
 
   logThReading(lastReadings.th);
   logPmReading(lastReadings.pm);
@@ -239,12 +307,15 @@ static void sampleSensors()
   renderScreen();
 }
 
-// Push the latest reading to the backend, reconnecting WiFi first if it
-// dropped. Result is kept for the status screen.
-static void uploadLatest()
+// Push the current window's average to the backend, reconnecting WiFi first if
+// it dropped. The window resets either way — every upload covers exactly one
+// interval. Result is kept for the status screen.
+static void uploadWindowAverage()
 {
-  if (!haveReadings)
+  if (!uploadWindow.complete())
   {
+    log_w("Upload tick: no complete samples in this window, skipping");
+    uploadWindow.reset();
     return;
   }
 
@@ -254,8 +325,10 @@ static void uploadLatest()
     connectWiFi();
   }
 
-  lastUpload = uploadReading(lastReadings);
+  log_i("Uploading average of %u PM / %u TH samples", uploadWindow.pmCount, uploadWindow.thCount);
+  lastUpload = uploadReading(uploadWindow.mean());
   lastUploadAt = millis();
+  uploadWindow.reset();
 
   if (currentScreen == SCREEN_STATUS)
   {
@@ -277,12 +350,13 @@ void loop()
     sampleSensors();
   }
 
-  // First upload fires as soon as a reading exists, so the device shows up
-  // online right after boot instead of 10 minutes later.
+  // First upload fires as soon as a complete sample exists (a one-sample
+  // "average"), so the device shows up online right after boot instead of 10
+  // minutes later.
   static uint32_t lastUploadTick = 0;
-  if (haveReadings && intervalElapsed(lastUploadTick, UPLOAD_INTERVAL_MS, true))
+  if (uploadWindow.complete() && intervalElapsed(lastUploadTick, UPLOAD_INTERVAL_MS, true))
   {
-    uploadLatest();
+    uploadWindowAverage();
   }
 
   // Yield ~1 ms back to the RTOS each pass. This isn't a pacing delay — the

@@ -31,7 +31,7 @@
 // flash is empty. Leave at 0 for normal operation (a wiped config also loses
 // anything provisioned over BLE on the previous run).
 #ifndef WIPE_CONFIG_ON_BOOT
-#define WIPE_CONFIG_ON_BOOT 0
+#define WIPE_CONFIG_ON_BOOT 1
 #endif
 
 // All the settings we store, kept together in one place.

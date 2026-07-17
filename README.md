@@ -21,11 +21,16 @@ reports over WiFi.
 | DHT22 data          | 14          |                                |
 | Button: Right       | 34          | input-only pin, FALLING edge   |
 | Button: Left        | 35          | input-only pin, FALLING edge   |
-| Button: Settings    | 36          | input-only pin, FALLING edge   |
-| Button: Boot        | 39          | input-only pin, FALLING edge   |
+| Button: Settings    | 36          | **disabled** (see note below)  |
+| Button: Boot        | 39          | **disabled** (see note below)  |
 
 > Note: GPIO 34/35/36/39 are input-only and have **no internal pull-ups** — make sure
 > each button has an external pull-up resistor.
+
+> **Settings/Boot are disabled in firmware:** GPIO36/39 are RTC-domain pins and an
+> ESP32 erratum makes them glitch on every WiFi modem-sleep wake, firing phantom
+> interrupts. WiFi power-save was kept instead of these buttons; rewire them to
+> non-RTC pins (and re-enable in `src/buttons.cpp`) to bring them back.
 
 ## Project layout
 
@@ -103,9 +108,11 @@ provisioning on every restart.
 
 ## Telemetry
 
-Every 10 minutes (first upload right after boot) the firmware POSTs the latest
-reading to `{BACKEND_BASE_URL}/data` with `X-Device-ID` / `X-Device-Key`
-headers:
+Sensors are sampled every **20 seconds**; the display always shows the latest
+sample. Every **10 minutes** (first upload right after boot) the firmware
+averages the window's samples (~30 per upload; AQI recomputed from the averaged
+concentrations) and POSTs the result to `{BACKEND_BASE_URL}/data` with
+`X-Device-ID` / `X-Device-Key` headers:
 
 ```json
 {
@@ -123,16 +130,15 @@ pinning is on the roadmap.
 
 ## Display & buttons
 
-Three screens on the 16×2 LCD, refreshed with each 3 s sensor sample using
+Three screens on the 16×2 LCD, refreshed with each 20 s sensor sample using
 fixed-width padded row writes (no flicker, no stale characters):
 
 1. **AQI** (home) — `AQI 54 Moderate` / `PM2.5 25ug/m3`
 2. **Climate** — `T 29.1C HI 33.5C` / `Humidity 61%`
 3. **Status** — `WiFi <ip>` or `WiFi DOWN` / `Up 201 3m ago`
 
-Buttons: **Right/Left** cycle screens, **Boot** returns to the AQI screen,
-**Settings** jumps to the status screen (a real settings menu is on the
-roadmap).
+Buttons: **Right/Left** cycle through all screens. (Settings/Boot are disabled
+— see the pin-map note; a real settings menu is on the roadmap.)
 
 ## Build & release (Makefile)
 
