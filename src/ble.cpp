@@ -9,8 +9,15 @@
 #include "config.h"
 #include "wifi_manager.h"
 
-// The name the phone sees when scanning for Bluetooth devices.
-#define BLE_DEVICE_NAME "AirMonitor-Setup"
+// Prefix of the name the phone sees when scanning. setupBluetooth() appends a
+// stable chip-ID suffix so multiple nearby monitors can be distinguished.
+#define BLE_DEVICE_NAME_PREFIX "AirMonitor-"
+
+// The default ATT MTU is 23 bytes, leaving 20 bytes for characteristic data.
+// Split every newline-delimited response into safe notification-sized chunks;
+// the app rejoins chunks until it sees the newline.
+static const size_t BLE_PAYLOAD_SIZE = 20;
+static const size_t BLE_RX_BUFFER_LIMIT = 512;
 
 // Fixed IDs for the Nordic UART Service. These are an industry standard, so
 // generic BLE apps already know how to talk to them.
@@ -22,16 +29,24 @@
 static BLECharacteristic *bleTxCharacteristic = nullptr;
 // True while a phone is connected. (volatile: changed inside BLE callbacks.)
 static volatile bool bleClientConnected = false;
+static String bleDeviceName;
+static String bleRxBuffer;
 
 // Send one line of text back to the connected phone.
 void bleSend(const String &msg)
 {
   if (bleClientConnected && bleTxCharacteristic != nullptr)
   {
-    // Put the text into the TX channel, then "notify" so the phone receives it.
-    // The (uint8_t*, size_t) form works on both old and new ESP32 BLE versions.
-    bleTxCharacteristic->setValue((uint8_t *)msg.c_str(), msg.length());
-    bleTxCharacteristic->notify();
+    String framed = msg + "\n";
+    for (size_t offset = 0; offset < framed.length(); offset += BLE_PAYLOAD_SIZE)
+    {
+      String chunk = framed.substring(offset, offset + BLE_PAYLOAD_SIZE);
+      // The (uint8_t*, size_t) form works on old and new ESP32 BLE versions.
+      bleTxCharacteristic->setValue((uint8_t *)chunk.c_str(), chunk.length());
+      bleTxCharacteristic->notify();
+      // Give the BLE stack time to queue consecutive notifications.
+      delay(10);
+    }
     log_i("BLE sent: %s", msg.c_str());
   }
   else
@@ -97,26 +112,31 @@ static void processBluetoothCommand(const String &cmd)
   else if (cmd.equalsIgnoreCase("SAVE"))
   {
     saveConfig(); // write all four values to flash
-    bleSend("SAVED. Reconnecting WiFi...");
+    bleSend("SAVE_BEGIN");
+    bleSend("WIFI_CONNECTING");
     if (connectWiFi())
     { // try the new credentials right away
-      bleSend("WiFi connected: " + WiFi.localIP().toString());
+      bleSend("SAVE_OK");
+      bleSend("IP:" + WiFi.localIP().toString());
     }
     else
     {
-      bleSend("WiFi connect FAILED (check SSID/password)");
+      bleSend("SAVE_FAILED:WIFI");
     }
+    bleSend("SAVE_END");
   }
   else if (cmd.equalsIgnoreCase("LOAD"))
   {
-    // Report what's currently set (secrets hidden for safety).
-    String out = "SSID=" + config.ssid;
-    out += " PASS=" + String(config.password.length() ? "(set)" : "(empty)");
-    out += " LAT=" + String(config.lat, 6);
-    out += " LON=" + String(config.lon, 6);
-    out += " DEVID=" + String(config.deviceId.length() ? config.deviceId.c_str() : "(empty)");
-    out += " DEVKEY=" + String(config.deviceKey.length() ? "(set)" : "(empty)");
-    bleSend(out);
+    // Send one framed field at a time. bleSend() chunks long fields safely, and
+    // secrets are represented only by whether a value has been configured.
+    bleSend("LOAD_BEGIN");
+    bleSend("SSID:" + config.ssid);
+    bleSend("PASS_SET:" + String(config.password.length() ? "1" : "0"));
+    bleSend("LAT:" + String(config.lat, 6));
+    bleSend("LON:" + String(config.lon, 6));
+    bleSend("DEVID:" + config.deviceId);
+    bleSend("DEVKEY_SET:" + String(config.deviceKey.length() ? "1" : "0"));
+    bleSend("LOAD_END");
   }
   else if (cmd.equalsIgnoreCase("CLEAR"))
   {
@@ -134,11 +154,13 @@ class ServerCallbacks : public BLEServerCallbacks
 {
   void onConnect(BLEServer *server) override
   {
+    bleRxBuffer = "";
     bleClientConnected = true;
     log_i("BLE: client CONNECTED");
   }
   void onDisconnect(BLEServer *server) override
   {
+    bleRxBuffer = "";
     bleClientConnected = false;
     log_i("BLE: client DISCONNECTED, advertising again");
     server->startAdvertising(); // become visible again to reconnect
@@ -153,10 +175,29 @@ class RxCallbacks : public BLECharacteristicCallbacks
     // Read the text the phone sent. .c_str() works on both old and new
     // ESP32 BLE versions (one returns std::string, the other Arduino String).
     String value = characteristic->getValue().c_str();
-    value.trim(); // drop stray newlines / spaces
-    if (value.length() > 0)
+    bleRxBuffer += value;
+
+    if (bleRxBuffer.length() > BLE_RX_BUFFER_LIMIT)
     {
-      processBluetoothCommand(value);
+      log_e("BLE: receive buffer exceeded %u bytes", BLE_RX_BUFFER_LIMIT);
+      bleRxBuffer = "";
+      bleSend("ERROR:COMMAND_TOO_LONG");
+      return;
+    }
+
+    int newline;
+    while ((newline = bleRxBuffer.indexOf('\n')) >= 0)
+    {
+      String command = bleRxBuffer.substring(0, newline);
+      bleRxBuffer.remove(0, newline + 1);
+      if (command.endsWith("\r"))
+      {
+        command.remove(command.length() - 1);
+      }
+      if (command.length() > 0)
+      {
+        processBluetoothCommand(command);
+      }
     }
   }
 };
@@ -167,9 +208,14 @@ void setupBluetooth()
 {
   log_i("BLE: setup start");
 
-  // 1) Start the BLE radio and give the device its name.
-  BLEDevice::init(BLE_DEVICE_NAME);
-  log_i("BLE: radio init done, MAC = %s", BLEDevice::getAddress().toString().c_str());
+  // 1) Derive a short stable suffix before initializing BLE, because the ESP32
+  // BLE version used by this project only accepts the name during init().
+  char suffix[5];
+  snprintf(suffix, sizeof(suffix), "%04X", static_cast<uint16_t>(ESP.getEfuseMac()));
+  bleDeviceName = BLE_DEVICE_NAME_PREFIX + String(suffix);
+  BLEDevice::init(bleDeviceName.c_str());
+  String mac = BLEDevice::getAddress().toString().c_str();
+  log_i("BLE: radio init done, MAC = %s, name = %s", mac.c_str(), bleDeviceName.c_str());
 
   // 2) Create the GATT server (the thing that holds our data).
   BLEServer *server = BLEDevice::createServer();
@@ -199,8 +245,8 @@ void setupBluetooth()
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
 
   BLEAdvertisementData advData;
-  advData.setFlags(0x06);           // standard "discoverable, BLE-only" flags
-  advData.setName(BLE_DEVICE_NAME); // name goes in the main packet
+  advData.setFlags(0x06);                 // standard "discoverable, BLE-only" flags
+  advData.setName(bleDeviceName.c_str()); // name goes in the main packet
   advertising->setAdvertisementData(advData);
 
   BLEAdvertisementData scanResponse;
@@ -208,5 +254,5 @@ void setupBluetooth()
   advertising->setScanResponseData(scanResponse);
 
   BLEDevice::startAdvertising();
-  log_i("BLE: advertising as '" BLE_DEVICE_NAME "' — ready to connect");
+  log_i("BLE: advertising as '%s' — ready to connect", bleDeviceName.c_str());
 }

@@ -87,15 +87,22 @@ This is a [PlatformIO](https://platformio.org/) project.
 ### Provisioning (app vs. mock)
 
 The device is designed to be provisioned by a mobile app over BLE (Nordic UART
-service, advertised as `AirMonitor-Setup`) with line commands:
+service, advertised as `AirMonitor-XXXX`, where `XXXX` is a stable device suffix)
+with newline-terminated commands:
 
 ```
 SSID:<name>  PASS:<secret>  LAT:<deg>  LON:<deg>  DEVID:<dev_...>  DEVKEY:<sk_...>
 SAVE   LOAD   CLEAR   PING   STATUS
 ```
 
-Until the app exists, **mock app provisioning** stands in for it:
-`MOCK_APP_PROVISIONING` (default `1`, `include/config.h`) seeds the config from
+Responses are newline-terminated and may be split across 20-byte BLE
+notifications. The client must buffer notification bytes until a newline.
+`LOAD` is framed by `LOAD_BEGIN` / `LOAD_END` and returns one setting per line;
+`SAVE` is framed by `SAVE_BEGIN` / `SAVE_END` and reports `SAVE_OK` or
+`SAVE_FAILED:WIFI`.
+
+For development, **mock app provisioning** can stand in for the app:
+`MOCK_APP_PROVISIONING` (default `0`, `include/config.h`) seeds the config from
 `secrets.h` on first boot — exactly the values the app would have sent — and
 saves them to flash. BLE provisioning stays fully functional and overwrites the
 mock values at any time. Set the flag to `0` once the real app ships.

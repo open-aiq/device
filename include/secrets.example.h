@@ -4,9 +4,9 @@
 // Copy this file to secrets.h and fill in your own values.
 // secrets.h is gitignored so your real credentials stay out of the repo.
 //
-// These values are used by the mock app provisioning path (see
-// MOCK_APP_PROVISIONING in config.h): until the mobile app exists, first boot
-// seeds the device config from here exactly as the app would over BLE.
+// These values are used only when the development-only MOCK_APP_PROVISIONING
+// flag in config.h is enabled. First boot then seeds the device config from
+// here exactly as the app would over BLE.
 
 #define WIFI_SSID     "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"
