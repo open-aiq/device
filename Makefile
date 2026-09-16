@@ -1,31 +1,26 @@
-PIO      := $(HOME)/.platformio/penv/bin/pio
-PY       := $(HOME)/.platformio/penv/bin/python
-ESPTOOL  := $(PY) $(HOME)/.platformio/packages/tool-esptoolpy/esptool.py
-ENV      := esp32doit-devkit-v1
-BUILDDIR := .pio/build/$(ENV)
+PIO      ?= pio
+ESPTOOL  := $(PIO) pkg exec --package tool-esptoolpy -- esptool.py
+PIO_ENV  := esp32doit-devkit-v1
+BUILDDIR := .pio/build/$(PIO_ENV)
 
 VERSION    ?=
 NOTES_FILE ?= RELEASE_NOTES.md
 PRERELEASE ?= true
 
-# Build the `gh release` notes flag: inline NOTES wins, else read from a file.
-ifdef NOTES
-  NOTES_ARG := --notes "$(NOTES)"
-else
-  NOTES_ARG := --notes-file "$(NOTES_FILE)"
-endif
+RELEASE_BRANCH ?= main
+DIST           ?= dist
 
-# Add --prerelease unless PRERELEASE=false.
-ifeq ($(PRERELEASE),true)
-  PRERELEASE_ARG := --prerelease
-else
-  PRERELEASE_ARG :=
-endif
+.PHONY: help build upload monitor erase merge clean tls-inspect tls-verify tls-update release
 
-.PHONY: build merge tag release clean check-release-inputs
+## help: Show available commands
+help:
+	@echo "Available commands:"
+	@echo ""
+	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
 
+## build: Compile the firmware
 build:
-	$(PIO) run -e $(ENV)
+	$(PIO) run -e $(PIO_ENV)
 
 merge: build
 	$(ESPTOOL) --chip esp32 merge_bin -o $(BUILDDIR)/merged-firmware.bin \
@@ -33,32 +28,12 @@ merge: build
 		0x1000  $(BUILDDIR)/bootloader.bin \
 		0x8000  $(BUILDDIR)/partitions.bin \
 		0x10000 $(BUILDDIR)/firmware.bin
-
-# Validate the per-release inputs up front, so we never push a git tag and then
-# fail on a missing version or notes file half-way through a release.
-check-release-inputs:
-	@test -n "$(VERSION)" || { \
-		echo "ERROR: VERSION is required, e.g. make release VERSION=v0.1.0"; exit 1; }
-ifndef NOTES
-	@test -f "$(NOTES_FILE)" || { \
-		echo "ERROR: notes file '$(NOTES_FILE)' not found."; \
-		echo "       Create it, pass NOTES_FILE=path, or NOTES=\"...\"."; exit 1; }
-endif
-
-tag: check-release-inputs
-	git tag -a $(VERSION) -m "Release $(VERSION)"
-	git push origin $(VERSION)
-
-release: check-release-inputs merge tag
-	gh release create $(VERSION) \
-		$(BUILDDIR)/firmware.bin \
-		$(BUILDDIR)/bootloader.bin \
-		$(BUILDDIR)/partitions.bin \
-		$(BUILDDIR)/merged-firmware.bin \
-		$(PRERELEASE_ARG) \
-		--title "$(VERSION)" \
-		$(NOTES_ARG)
-
-# Remove build artifacts.
+## clean: Remove build artifacts
 clean:
-	$(PIO) run -e $(ENV) -t clean
+	$(PIO) run -e $(PIO_ENV) -t clean
+
+##.
+## release: Bump version, build artifacts, tag, and publish a GitHub release
+release:
+	@RELEASE_BRANCH="$(RELEASE_BRANCH)" DIST="$(DIST)" PIO_ENV="$(PIO_ENV)" BUILDDIR="$(BUILDDIR)" \
+		bash scripts/release.sh
