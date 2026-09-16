@@ -10,7 +10,7 @@ PRERELEASE ?= true
 RELEASE_BRANCH ?= main
 DIST           ?= dist
 
-.PHONY: help build upload monitor erase merge clean tls-inspect tls-verify tls-update release
+.PHONY: help build upload monitor erase merge clean libs-outdated tls-inspect tls-verify tls-update release
 
 ## help: Show available commands
 help:
