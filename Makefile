@@ -34,6 +34,10 @@ monitor:
 erase:
 	$(PIO) run -e $(PIO_ENV) -t erase
 
+## libs-outdated: Check installed libraries for newer versions
+libs-outdated:
+	$(PIO) pkg outdated -e $(PIO_ENV)
+
 ## tls-inspect: Inspect the backend's live TLS certificate chain
 tls-inspect:
 	@bash scripts/tls_certificate.sh inspect "$(BACKEND_HOST)" "$(TLS_PORT)"
