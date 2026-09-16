@@ -76,7 +76,7 @@ clean:
 	$(PIO) run -e $(PIO_ENV) -t clean
 
 ##.
-## release: Bump version, build artifacts, tag, and publish a GitHub release
+## release: Build, tag, and publish — make release [version=major|minor|patch|1.2.3|1.2.3-rc.1]
 release:
-	@RELEASE_BRANCH="$(RELEASE_BRANCH)" DIST="$(DIST)" PIO_ENV="$(PIO_ENV)" BUILDDIR="$(BUILDDIR)" \
+	@RELEASE_BRANCH="$(RELEASE_BRANCH)" RELEASE_VERSION="$(version)" DIST="$(DIST)" PIO_ENV="$(PIO_ENV)" BUILDDIR="$(BUILDDIR)" \
 		bash scripts/release.sh

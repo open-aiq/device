@@ -140,6 +140,15 @@ fixed-width padded row writes (no flicker, no stale characters):
 Buttons: **Right/Left** cycle through all screens. (Settings/Boot are disabled
 — see the pin-map note; a real settings menu is on the roadmap.)
 
+## Releases
+
+Run `make release` from a clean `main` branch and enter `major`, `minor`, `patch`, or an exact
+semantic version when prompted. To bypass the prompt, run `make release version=1.4.0`. A leading
+`v` and prerelease suffixes such as `1.4.0-rc.1` are accepted. The command builds the firmware,
+tags the commit, and publishes the artifacts in a GitHub release.
+
+Releasing requires authenticated `gh` and PlatformIO CLIs and changes external Git/GitHub state.
+
 ## Known issues / TODO
 
 - [ ] **Fix the HTTPClient URL-parser bug.** The query string is currently only

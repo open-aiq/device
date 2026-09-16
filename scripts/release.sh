@@ -27,13 +27,15 @@ git diff-index --quiet HEAD -- ||
 git fetch --tags --quiet
 current="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
 
-if [ -z "$current" ]; then
-	next="v0.1.0"
-	echo "No existing tags — seeding first release at $next."
-else
+current="${current:-v0.0.0}"
+choice="${1:-${RELEASE_VERSION:-}}"
+if [ -z "$choice" ]; then
 	read -rp "Current version: $current
-Bump type [major/minor/patch]: " bump
+Bump type or version [major/minor/patch/x.y.z]: " choice
+fi
 
+case "$choice" in
+	major | minor | patch)
 	version="${current#v}"
 	major="${version%%.*}"
 	rest="${version#*.}"
@@ -41,15 +43,19 @@ Bump type [major/minor/patch]: " bump
 	patch="${rest#*.}"
 	patch="${patch%%-*}"
 
-	case "$bump" in
+	case "$choice" in
 		major) major=$((major + 1)); minor=0; patch=0 ;;
 		minor) minor=$((minor + 1)); patch=0 ;;
 		patch) patch=$((patch + 1)) ;;
-		*)     die "invalid bump type '$bump' (expected major, minor, or patch)" ;;
 	esac
-
 	next="v${major}.${minor}.${patch}"
-fi
+	;;
+	*)
+		next="v${choice#v}"
+		[[ "$next" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
+			die "invalid version '$choice' (expected major, minor, patch, or a semantic version)"
+		;;
+esac
 
 git rev-parse "$next" >/dev/null 2>&1 && die "tag $next already exists"
 
