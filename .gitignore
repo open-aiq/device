@@ -3,6 +3,7 @@
 .piolibdeps
 .clang_complete
 .gcc-flags.json
+/dist/
 
 # Local secrets — never commit real WiFi credentials
 include/secrets.h
