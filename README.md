@@ -101,17 +101,10 @@ notifications. The client must buffer notification bytes until a newline.
 `SAVE` is framed by `SAVE_BEGIN` / `SAVE_END` and reports `SAVE_OK` or
 `SAVE_FAILED:WIFI`.
 
-For development, **mock app provisioning** can stand in for the app:
-`MOCK_APP_PROVISIONING` (default `0`, `include/config.h`) seeds the config from
-`secrets.h` on first boot — exactly the values the app would have sent — and
-saves them to flash. BLE provisioning stays fully functional and overwrites the
-mock values at any time. Set the flag to `0` once the real app ships.
-
-Mock provisioning only fires when flash is empty. After changing `secrets.h`,
-either send `CLEAR` over BLE or build once with `WIPE_CONFIG_ON_BOOT` set to
-`1` (`include/config.h`) — it wipes the saved config on every boot so the
-re-seed happens. Set it back to `0` afterwards, or the device forgets BLE
-provisioning on every restart.
+For development, mock provisioning can seed an empty configuration from
+`secrets.h`, exactly as the app would over BLE. Normal firmware builds disable
+mock provisioning and preserve saved configuration. BLE provisioning remains
+fully functional and can overwrite mock values at any time.
 
 ## Telemetry
 

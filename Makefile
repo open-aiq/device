@@ -3,6 +3,10 @@ ESPTOOL  := $(PIO) pkg exec --package tool-esptoolpy -- esptool.py
 PIO_ENV  := esp32doit-devkit-v1
 BUILDDIR := .pio/build/$(PIO_ENV)
 
+MOCK_PROVISIONING ?= 0
+WIPE_CONFIG       ?= 0
+BUILD_FLAGS       = -DCORE_DEBUG_LEVEL=4 -DMOCK_APP_PROVISIONING=$(MOCK_PROVISIONING) -DWIPE_CONFIG_ON_BOOT=$(WIPE_CONFIG)
+
 VERSION    ?=
 NOTES_FILE ?= RELEASE_NOTES.md
 PRERELEASE ?= true
@@ -10,7 +14,7 @@ PRERELEASE ?= true
 RELEASE_BRANCH ?= main
 DIST           ?= dist
 
-.PHONY: help build upload monitor erase merge clean libs-outdated tls-inspect tls-verify tls-update release
+.PHONY: help build build-mock-provision build-reset upload monitor erase merge clean libs-outdated tls-inspect tls-verify tls-update release
 
 ## help: Show available commands
 help:
@@ -20,7 +24,15 @@ help:
 
 ## build: Compile the firmware
 build:
-	$(PIO) run -e $(PIO_ENV)
+	PLATFORMIO_BUILD_FLAGS="$(BUILD_FLAGS)" $(PIO) run -e $(PIO_ENV)
+
+## build-mock-provision: Build with provisioning values from secrets.h
+build-mock-provision: MOCK_PROVISIONING=1
+build-mock-provision: build
+
+## build-reset: Build firmware that clears saved provisioning on every boot
+build-reset: WIPE_CONFIG=1
+build-reset: build
 
 ## upload: Build and upload firmware to an attached device
 upload:
