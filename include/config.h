@@ -13,7 +13,7 @@
 // HTTPClient's URL parser needs at least one '/' after the host (see
 // docs/upstream-bug-httpclient-url-parser.md).
 #ifndef BACKEND_BASE_URL
-#define BACKEND_BASE_URL "https://backend-h5v6.onrender.com/api/v1"
+#define BACKEND_BASE_URL "https://api.air-iq.net/api/v1"
 #endif
 
 // Development-only mock provisioning. When enabled, seed an empty config from
