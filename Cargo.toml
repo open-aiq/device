@@ -1,0 +1,32 @@
+[package]
+name = "device_rust"
+version = "0.1.0"
+authors = ["Zeeshan Iqbal <zeeshan.iqbal.cs@gmail.com>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+
+[[bin]]
+name = "device_rust"
+harness = false
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # Symbols are nice, and they don't increase the size on Flash
+opt-level = "z"
+[dependencies]
+log = "0.4"
+anyhow = "1.0.104"
+embedded-graphics = "0.8.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+embedded-svc = "0.29"
+esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-sync"] }
+esp32-nimble = "0.12"
+
+[build-dependencies]
+embuild = { version = "0.33.5", features = ["espidf"] }
