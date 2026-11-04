@@ -1,161 +1,90 @@
-# Device Firmware — Air Quality Monitor
+# AirMonitor Rust firmware
 
-ESP32 firmware for an air-quality monitor that reads particulate matter, temperature,
-and humidity, drives a 16×2 I2C LCD, handles four push buttons via interrupts, and
-reports over WiFi.
+This ESP32-S3 Rust experiment lives on the `rust` branch of the device
+repository. The Arduino firmware for the ESP32 DOIT DevKit v1 remains on
+`main`.
 
-## Hardware
+Rust/ESP-IDF firmware for the ESP32-S3 AirMonitor. It reads a PMS5003 and SHT30,
+renders three screens on a 128x64 I2C OLED, provisions over the Nordic UART BLE
+service, persists configuration in NVS, and uploads ten-minute averages.
 
-- **MCU:** ESP32 (DOIT ESP32 DevKit v1)
-- **PM sensor:** Plantower PMS5003 (UART, on `Serial2`)
-- **Temp/Humidity:** DHT22
-- **Display:** 16×2 character LCD over I2C (PCF8574 backpack, address `0x3F`)
-- **Input:** 4 push buttons (Right / Left / Settings / Boot)
+## Wiring
 
-## Pin map
+[`src/board.rs`](src/board.rs) is the source of truth for GPIO selection and
+hardware initialization: shared I2C at 400 kHz, PMS5003 UART at 9,600 baud,
+and active-low buttons with internal pull-ups.
 
-| Function            | GPIO        | Notes                          |
-|---------------------|-------------|--------------------------------|
-| I2C SDA / SCL       | 21 / 22     | LCD                            |
-| PMS5003 RX / TX     | 16 / 17     | `Serial2`, 9600 baud           |
-| DHT22 data          | 14          |                                |
-| Button: Right       | 34          | input-only pin, FALLING edge   |
-| Button: Left        | 35          | input-only pin, FALLING edge   |
-| Button: Settings    | 36          | **disabled** (see note below)  |
-| Button: Boot        | 39          | **disabled** (see note below)  |
+| Device | Signal | ESP32-S3 GPIO |
+| --- | --- | --- |
+| OLED + SHT30 | SDA | 8 |
+| OLED + SHT30 | SCL | 9 |
+| PMS5003 | sensor TX -> ESP RX | 18 |
+| PMS5003 | sensor RX <- ESP TX | 17 |
+| Button | Right, active-low | 4 |
+| Button | Left, active-low | 5 |
 
-> Note: GPIO 34/35/36/39 are input-only and have **no internal pull-ups** — make sure
-> each button has an external pull-up resistor.
+Power the OLED and SHT30 at 3.3 V and ensure the shared I2C bus has pull-ups.
+The PMS5003 normally uses 5 V power; verify the module's UART logic levels.
 
-> **Settings/Boot are disabled in firmware:** GPIO36/39 are RTC-domain pins and an
-> ESP32 erratum makes them glitch on every WiFi modem-sleep wake, firing phantom
-> interrupts. WiFi power-save was kept instead of these buttons; rewire them to
-> non-RTC pins (and re-enable in `src/buttons.cpp`) to bring them back.
+At boot the firmware accepts an SHT30 at `0x44`/`0x45` and OLED at
+`0x3C`/`0x3D`. Missing or ambiguous devices are logged without stopping other
+services. Controller type cannot be inferred from its address.
 
-## Project layout
+## Build and quality gates
 
-```
-.
-├── platformio.ini          # build config, board, library deps
-├── src/main.cpp            # firmware source
-├── include/
-│   ├── secrets.h           # WiFi credentials (gitignored — create from template)
-│   └── secrets.example.h   # template to copy
-└── README.md
+The default controller is SH1106:
+
+```sh
+OLED_CONTROLLER=sh1106 cargo build --release
+OLED_CONTROLLER=ssd1306 cargo build --release
+make format
+make verify HOST_TARGET=aarch64-apple-darwin
 ```
 
-## Setup
+Use `HOST_TARGET=x86_64-unknown-linux-gnu` on Linux. `cargo fmt` rewrites source;
+CI uses `cargo fmt -- --check`. Clippy uses `-D warnings`. Host tests cover the
+portable library and separate ESP32-S3 jobs compile both OLED selections.
 
-This is a [PlatformIO](https://platformio.org/) project.
+Flash only when hardware is attached:
 
-1. Copy the secrets template and fill in your WiFi details and device
-   credentials (register a device against the backend to get `DEVICE_ID` and
-   the one-time `DEVICE_KEY`):
-
-   ```bash
-   cp include/secrets.example.h include/secrets.h
-   # then edit include/secrets.h
-   ```
-
-2. Build:
-
-   ```bash
-   pio run
-   ```
-
-3. Upload to the board:
-
-   ```bash
-   pio run -t upload
-   ```
-
-4. Open the serial monitor (9600 baud):
-
-   ```bash
-   pio device monitor
-   ```
-
-## Configuration & provisioning
-
-- Secrets live in `include/secrets.h`: `WIFI_SSID`, `WIFI_PASSWORD`,
-  `DEVICE_ID`, `DEVICE_KEY`, `MOCK_LAT`, `MOCK_LON`.
-- Board, monitor speed, and library dependencies are set in `platformio.ini`.
-- The backend base URL is `BACKEND_BASE_URL` in `include/config.h`
-  (default `https://api.air-iq.net/api/v1`; override with a
-  `-DBACKEND_BASE_URL=...` build flag).
-
-### Provisioning (app vs. mock)
-
-The device is designed to be provisioned by a mobile app over BLE (Nordic UART
-service, advertised as `AirMonitor-XXXX`, where `XXXX` is a stable device suffix)
-with newline-terminated commands:
-
-```
-SSID:<name>  PASS:<secret>  LAT:<deg>  LON:<deg>  DEVID:<dev_...>  DEVKEY:<sk_...>
-SAVE   LOAD   CLEAR   PING   STATUS
+```sh
+OLED_CONTROLLER=sh1106 cargo run --release
 ```
 
-Responses are newline-terminated and may be split across 20-byte BLE
-notifications. The client must buffer notification bytes until a newline.
-`LOAD` is framed by `LOAD_BEGIN` / `LOAD_END` and returns one setting per line;
-`SAVE` is framed by `SAVE_BEGIN` / `SAVE_END` and reports `SAVE_OK` or
-`SAVE_FAILED:WIFI`.
+## Provisioning
 
-For development, mock provisioning can seed an empty configuration from
-`secrets.h`, exactly as the app would over BLE. Normal firmware builds disable
-mock provisioning and preserve saved configuration. BLE provisioning remains
-fully functional and can overwrite mock values at any time.
+The BLE device is `AirMonitor-XXXX`. Its Nordic UART service accepts:
 
-## Telemetry
-
-Sensors are sampled every **20 seconds**; the display always shows the latest
-sample. Every **10 minutes** (first upload right after boot) the firmware
-averages the window's samples (~30 per upload; AQI recomputed from the averaged
-concentrations) and POSTs the result to `{BACKEND_BASE_URL}/data` with
-`X-Device-ID` / `X-Device-Key` headers:
-
-```json
-{
-  "pms_data":         { "pm1_0": 5, "pm2_5": 12, "pm10_0": 18, "provider": "pms5003" },
-  "aqi": 57,
-  "temperature_data": { "temperature": 31.2, "humidity": 64.5, "heat_index": 36.8, "provider": "dht22" },
-  "location":         { "lat": 24.8607, "lon": 67.0011, "provider": "mobile" }
-}
+```text
+SSID:<name>  PASS:<secret>  LAT:<deg>  LON:<deg>
+DEVID:<dev_...>  DEVKEY:<sk_...>
+SAVE  LOAD  CLEAR  PING  STATUS
 ```
 
-`location` is omitted while lat/lon are unset (0/0). Uploads are skipped (and
-logged) when WiFi is down, credentials are missing, or the reading is
-incomplete; the next tick retries. HTTPS validates the server against the GTS
-Root R4 CA certificate embedded in the firmware image.
+Commands and responses are newline-terminated; notifications remain at most 20
+bytes and receive commands are limited to 512 bytes. Secrets are never echoed.
 
-## Display & buttons
+An empty NVS can be seeded in a development build without committing secrets:
 
-Three screens on the 16×2 LCD, refreshed with each 20 s sensor sample using
-fixed-width padded row writes (no flicker, no stale characters):
+```sh
+MOCK_WIFI_SSID=... MOCK_WIFI_PASSWORD=... \
+MOCK_DEVICE_ID=dev_... MOCK_DEVICE_KEY=sk_... \
+MOCK_LAT=24.8607 MOCK_LON=67.0011 cargo build
+```
 
-1. **AQI** (home) — `AQI 54 Moderate` / `PM2.5 25ug/m3`
-2. **Climate** — `T 29.1C HI 33.5C` / `Humidity 61%`
-3. **Status** — `WiFi <ip>` or `WiFi DOWN` / `Up 201 3m ago`
+Set `WIPE_CONFIG_ON_BOOT=1` only for a deliberate reset build. Mock values are
+compiled into that binary and must not be distributed. `BACKEND_BASE_URL`
+defaults to `https://api.air-iq.net/api/v1`. HTTPS uses ESP-IDF's embedded CA
+bundle.
 
-Buttons: **Right/Left** cycle through all screens. (Settings/Boot are disabled
-— see the pin-map note; a real settings menu is on the roadmap.)
+## Manual hardware acceptance
 
-## Releases
+For each OLED controller build:
 
-Run `make release` from a clean `main` branch and enter `major`, `minor`, `patch`, or an exact
-semantic version when prompted. To bypass the prompt, run `make release version=1.4.0`. A leading
-`v` and prerelease suffixes such as `1.4.0-rc.1` are accepted. The command builds the firmware,
-tags the commit, and publishes the artifacts in a GitHub release.
-
-Releasing requires authenticated `gh` and PlatformIO CLIs and changes external Git/GitHub state.
-
-## Known issues / TODO
-
-- [ ] **Fix the HTTPClient URL-parser bug.** The query string is currently only
-  reachable by adding a `/` before `?` in the request URL, as a workaround for an
-  upstream parser bug. Track down and fix the root cause (or upstream a patch).
-  See [docs/upstream-bug-httpclient-url-parser.md](docs/upstream-bug-httpclient-url-parser.md).
-- [ ] **Reduce firmware size.** Adding BLE (Bluedroid) on top of WiFi + TLS pushed
-  the binary past the default 1.3 MB app partition, so the build now uses the
-  `huge_app.csv` partition scheme (3 MB app, no OTA). Investigate slimming the
-  build (e.g. NimBLE instead of Bluedroid) to recover headroom and re-enable OTA.
+1. Confirm the expected OLED and SHT30 addresses in the boot log.
+2. Confirm PMS5003, temperature, and humidity samples every 20 seconds.
+3. Confirm buttons cycle AQI, climate, and status screens without bounce.
+4. Exercise `PING`, fragmented commands, `LOAD`, `SAVE`, and `CLEAR` over BLE.
+5. Verify bad WiFi credentials leave BLE available, then provision valid ones.
+6. Verify an authenticated upload returns HTTP 201 and survives a reboot.
+7. Disconnect each sensor in turn and verify other services keep running.

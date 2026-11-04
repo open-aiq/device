@@ -1,9 +1,3 @@
-.pio
-.pioenvs
-.piolibdeps
-.clang_complete
-.gcc-flags.json
-/dist/
-
-# Local secrets — never commit real WiFi credentials
-include/secrets.h
+/.vscode
+/.embuild
+/target
