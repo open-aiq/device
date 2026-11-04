@@ -13,6 +13,10 @@ jobs:
   host:
     name: Host quality gates
     runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins the Xtensa "esp" toolchain for firmware builds;
+      # the host library checks run on stable.
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
