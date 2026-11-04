@@ -1,12 +1,12 @@
 # AirMonitor Rust firmware
 
-This ESP32-S3 Rust experiment lives on the `rust` branch of the device
-repository. The Arduino firmware for the ESP32 DOIT DevKit v1 remains on
-`main`.
+This is the AirMonitor firmware on `main`. It replaces the earlier Arduino
+firmware for the ESP32 DOIT DevKit v1, which remains available in git history.
 
 Rust/ESP-IDF firmware for the ESP32-S3 AirMonitor. It reads a PMS5003 and SHT30,
-renders three screens on a 128x64 I2C OLED, provisions over the Nordic UART BLE
-service, persists configuration in NVS, and uploads ten-minute averages.
+renders three screens on a 128x64 I2C OLED, provisions over a passkey-secured
+Nordic UART BLE service, persists configuration in NVS, uploads ten-minute
+averages and important log events, and installs owner-approved OTA updates.
 
 ## Wiring
 
@@ -48,21 +48,143 @@ portable library and separate ESP32-S3 jobs compile both OLED selections.
 Flash only when hardware is attached:
 
 ```sh
-OLED_CONTROLLER=sh1106 cargo run --release
+make flash            # build, flash with partitions.csv + rollback bootloader, monitor
+make board:info       # read-only: chip and flash size
 ```
 
-## Provisioning
+### Partition table and OTA
 
-The BLE device is `AirMonitor-XXXX`. Its Nordic UART service accepts:
+[`partitions.csv`](partitions.csv) holds two 1.94 MB OTA app slots (`ota_0`,
+`ota_1`) and fits any ESP32-S3 module with 4 MB of flash or more. `nvs` keeps its
+default offset, so provisioning survives the switch. Moving from the old
+single-app table needs **one USB flash** with `make flash`, which passes
+`--partition-table partitions.csv` and the ESP-IDF bootloader built with
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. After that, updates arrive over the air.
+Plain `espflash flash` without these flags substitutes espflash's own table and
+bootloader.
 
-```text
-SSID:<name>  PASS:<secret>  LAT:<deg>  LON:<deg>
-DEVID:<dev_...>  DEVKEY:<sk_...>
-SAVE  LOAD  CLEAR  PING  STATUS
+`make image` writes the OTA image (`target/xtensa-esp32s3-espidf/release/device_rust.bin`)
+and prints the size and SHA-256 that a firmware release is published with.
+
+## Serial buttons
+
+The `serial-buttons` cargo feature (on by default) lets the serial console stand
+in for the physical buttons. With `make monitor` open, type a line and press Enter:
+
+| Line | Same as |
+| --- | --- |
+| `BTN:PAIR` | Holding both buttons for 3 s (opens pairing mode) |
+| `BTN:LEFT` / `BTN:RIGHT` | Left / right button |
+| `BTN:HELP` | Prints the list |
+
+Both the UART0 console and the native USB-Serial-JTAG port are read. Build with
+`--no-default-features` to remove the feature.
+
+## Provisioning over BLE
+
+The device is `AirMonitor-XXXX` (last two MAC bytes) and exposes the Nordic UART
+Service:
+
+| UUID | Role |
+| --- | --- |
+| `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | Service |
+| `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` | RX: phone writes commands |
+| `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` | TX: device notifies replies |
+
+### Pairing mode and security
+
+BLE is **off by default**. Hold both buttons for 3 seconds (or type `BTN:PAIR`)
+to start advertising for 5 minutes. The OLED shows `PAIRING` and a countdown.
+
+- **Authenticated pairing.** RX and TX require an encrypted, MITM-authenticated
+  link: LE Secure Connections with passkey entry, using IO capability
+  `DisplayOnly`.
+- **Passkey.** Each pairing window gets a fresh random 6-digit passkey. When a
+  phone starts pairing, the passkey is shown on the OLED and printed to the
+  serial log as `BLE PAIRING PASSKEY: 123 456`. It is never uploaded.
+- **Bonds.** Bonds persist in NVS (at most 3), so a paired phone reconnects
+  without a passkey. It still needs pairing mode to find the device.
+- **Window.** While a phone is connected, the window stays open until 10
+  minutes without commands. After a disconnect, advertising continues for 60
+  seconds so bonding reconnects succeed, then BLE stops.
+- **Factory reset.** `CLEAR` wipes provisioning and all bonds.
+
+The earlier Arduino firmware has no pairing security. The Open AIQ
+app requires this firmware.
+
+### Commands
+
+Commands are newline-terminated text. Replies are newline-terminated lines sent
+as notifications of up to `MTU - 3` bytes (MTU 247 is requested; 20-byte chunks
+at the default MTU). Clients must reassemble notifications until `\n`. Receive
+lines are limited to 512 bytes. Secrets are never echoed.
+
+| Command | Reply |
+| --- | --- |
+| `PING` | `PONG` |
+| `STATUS` | `WiFi: connected IP: <ip>` |
+| `INFO` | `INFO_BEGIN`, `FW:<ver>`, `MAC:<hex>`, `DEVID:<id>`, `DEVKEY_SET:0/1`, `WIFI:connected/disconnected`, `SSID:<ssid>`, `IP:<ip>`, `LAST_UPLOAD:<http>,<secs ago>` or `LAST_UPLOAD:none`, `INFO_END` |
+| `SCAN` | `SCAN_BEGIN`, `NET:<rssi>,<open/secured>,<ssid>` (strongest first, at most 15; SSID may contain commas), `SCAN_END`; `ERROR:SCAN` on failure |
+| `SSID:<name>` / `PASS:<secret>` | `OK: SSID set to <name>` / `OK: password set` |
+| `LAT:<deg>` / `LON:<deg>` | `OK: LAT set to <6dp>` / `OK: LON set to <6dp>` |
+| `DEVID:<dev_...>` / `DEVKEY:<sk_...>` | `OK: DEVID set to <id>` / `OK: device key set` |
+| `SAVE` | `SAVE_BEGIN`, `WIFI_CONNECTING`, then `SAVE_OK` + `IP:<ip>`, or `SAVE_FAILED:WIFI` / `SAVE_FAILED:STORAGE`, then `SAVE_END` |
+| `LOAD` | `LOAD_BEGIN`, `SSID:`, `PASS_SET:0/1`, `LAT:`, `LON:`, `DEVID:`, `DEVKEY_SET:0/1`, `LOAD_END` |
+| `READ` | `READING:{json}` with the latest 20 s sample, or `ERROR:NO_READING` |
+| `LIVE:ON` / `LIVE:OFF` | `OK: live on/off`; while on, `READING:{json}` after every sample until disconnect |
+| `OTA:CHECK` | `OK: ota check`; the device checks for an approved update right away (`OTA:NONE`, `OTA:STARTING <ver>`, `OTA:FAILED`) |
+| `CLEAR` | `CLEARED all stored config` (also removes BLE bonds) |
+
+`READING` JSON uses the upload payload's keys:
+`{"pm1_0":3,"pm2_5":12,"pm10_0":18,"aqi":57,"temperature":24.5,"humidity":40.0,"heat_index":24.9,"uptime_ms":123456}`.
+Fields are `null` while a sensor is missing.
+
+Setters change RAM only; `SAVE` persists them and reconnects WiFi. Credentials
+are written to NVS even when `SAVE_FAILED:WIFI` is returned.
+
+## Backend communication
+
+All device requests send `X-Device-ID`, `X-Device-Key` and
+`X-Firmware-Version` (`CARGO_PKG_VERSION`) to `BACKEND_BASE_URL`.
+
+| Request | When |
+| --- | --- |
+| `POST /data` | Every 10 minutes with the averaged reading (first upload after the first complete sample) |
+| `POST /device/logs` | After each successful upload and once WiFi is up after boot |
+| `GET /device/ota` | After each successful upload, or on `OTA:CHECK` |
+| `POST /device/ota/status` | During an update: `downloading` (every 10 %), `installing`, `succeeded`, `failed` |
+
+### Device logs
+
+WARN and ERROR records, plus important events logged with `event!("tag", ...)`,
+are kept in a 64-entry RAM ring buffer. Events include boot with reset reason,
+WiFi, upload failures, BLE pairing, provisioning and every OTA step. They are
+uploaded in batches of at most 50:
+
+```json
+{"entries":[{"level":"warn","tag":"wifi","message":"reconnect failed: ...","uptime_ms":183000,"boot_count":12,"ts":1793700000}],"dropped":0}
 ```
 
-Commands and responses are newline-terminated; notifications remain at most 20
-bytes and receive commands are limited to 512 bytes. Secrets are never echoed.
+`ts` is SNTP Unix time and is omitted until the clock syncs. `boot_count` is
+stored in NVS namespace `sys`, so `CLEAR` does not reset it. Never log secrets:
+log entries are uploaded.
+
+### OTA updates
+
+1. The owner approves an update in the mobile app.
+2. `GET /device/ota` returns
+   `{"data":{"job_id","version","url","sha256","size","status"}}`, or
+   `{"data":null}` when nothing is approved.
+3. The device streams the image over HTTPS into the inactive slot, checking size
+   and SHA-256. It reports `downloading` progress, activates the slot, reports
+   `installing` and reboots. If the first `downloading` report returns 409, the
+   job was cancelled and the device skips the update.
+4. The new image stays pending-verify until its first successful upload. It
+   then marks itself valid and reports `succeeded`. If it is not verified within
+   5 minutes, or crashes, the bootloader rolls back. The old image then reports
+   `failed: rolled back to <ver>`.
+
+The OLED shows `Updating NN%` during the download; BLE and sampling pause.
 
 An empty NVS can be seeded in a development build without committing secrets:
 
@@ -83,8 +205,16 @@ For each OLED controller build:
 
 1. Confirm the expected OLED and SHT30 addresses in the boot log.
 2. Confirm PMS5003, temperature, and humidity samples every 20 seconds.
-3. Confirm buttons cycle AQI, climate, and status screens without bounce.
-4. Exercise `PING`, fragmented commands, `LOAD`, `SAVE`, and `CLEAR` over BLE.
-5. Verify bad WiFi credentials leave BLE available, then provision valid ones.
-6. Verify an authenticated upload returns HTTP 201 and survives a reboot.
-7. Disconnect each sensor in turn and verify other services keep running.
+3. Confirm buttons (or `BTN:LEFT` / `BTN:RIGHT`) cycle AQI, climate, and
+   status screens without bounce.
+4. Confirm BLE is not advertising until `BTN:PAIR` / both-button hold. Confirm
+   writes before passkey pairing are rejected, and that the passkey shown on
+   the OLED or serial log pairs.
+5. Exercise `PING`, fragmented commands, `INFO`, `SCAN`, `LIVE:ON`, `LOAD`,
+   `SAVE`, and `CLEAR` (bonds removed) over BLE.
+6. Verify bad WiFi credentials leave BLE available, then provision valid ones.
+7. Verify an authenticated upload returns HTTP 201 and survives a reboot.
+8. Disconnect each sensor in turn and verify other services keep running.
+9. Publish a newer release, approve it in the app and verify `succeeded`.
+   Verify that a wrong `sha256` is rejected without switching slots, and that a
+   panicking image rolls back and reports `failed`.
