@@ -10,7 +10,7 @@ use esp_idf_svc::{
 
 use crate::{
     config::DeviceConfig,
-    wifi::{WifiPort, WifiStatus},
+    wifi::{dedupe_networks, WifiNetwork, WifiPort, WifiStatus},
 };
 
 pub struct EspWifiPort<'d> {
@@ -80,5 +80,26 @@ impl WifiPort for EspWifiPort<'_> {
             })
             .flatten();
         WifiStatus { connected, ip }
+    }
+
+    fn scan(&mut self) -> Result<Vec<WifiNetwork>, Self::Error> {
+        if !self.wifi.is_started()? {
+            if !matches!(self.wifi.get_configuration()?, Configuration::Client(_)) {
+                self.wifi
+                    .set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
+            }
+            self.wifi.start()?;
+        }
+        let found = self.wifi.scan()?;
+        Ok(dedupe_networks(
+            found
+                .into_iter()
+                .map(|ap| WifiNetwork {
+                    ssid: ap.ssid.as_str().to_owned(),
+                    rssi: ap.signal_strength,
+                    secured: !matches!(ap.auth_method, None | Some(AuthMethod::None)),
+                })
+                .collect(),
+        ))
     }
 }
