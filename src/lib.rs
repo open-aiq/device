@@ -5,6 +5,7 @@ pub mod board;
 pub mod buttons;
 pub mod config;
 pub mod device_api;
+pub mod devlog;
 pub mod display;
 pub mod sensors;
 pub mod storage;
