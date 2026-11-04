@@ -133,6 +133,36 @@ pub fn build_payload(
     serde_json::to_string(&payload).map_err(|_| PayloadError::Serialize)
 }
 
+/// Latest single sample streamed over BLE as `READING:{json}` (keys match the upload payload).
+#[derive(Serialize)]
+struct LiveReading {
+    pm1_0: Option<u16>,
+    pm2_5: Option<u16>,
+    pm10_0: Option<u16>,
+    aqi: Option<u16>,
+    temperature: Option<f32>,
+    humidity: Option<f32>,
+    heat_index: Option<f32>,
+    uptime_ms: u64,
+}
+
+pub fn live_reading_json(readings: &SensorReadings, uptime_ms: u64) -> String {
+    let pm = readings.pm.as_ref();
+    let climate = readings.climate.as_ref();
+    let round1 = |value: f32| (value * 10.0).round() / 10.0;
+    serde_json::to_string(&LiveReading {
+        pm1_0: pm.map(|value| value.pm1_0),
+        pm2_5: pm.map(|value| value.pm2_5),
+        pm10_0: pm.map(|value| value.pm10_0),
+        aqi: readings.aqi.map(|value| value.aqi),
+        temperature: climate.map(|value| round1(value.temperature_c)),
+        humidity: climate.map(|value| round1(value.humidity)),
+        heat_index: climate.map(|value| round1(value.heat_index_c)),
+        uptime_ms,
+    })
+    .unwrap_or_else(|_| "{}".to_owned())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadError {
     Incomplete,
@@ -193,6 +223,19 @@ mod tests {
         assert_eq!(mean.climate.unwrap().temperature_c, 25.0);
         aggregator.reset();
         assert!(!aggregator.complete());
+    }
+
+    #[test]
+    fn live_reading_has_backend_keys_and_nulls() {
+        let json = live_reading_json(&sample(12, 25.04), 42);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["pm2_5"], 12);
+        assert_eq!(value["temperature"], 25.0);
+        assert_eq!(value["uptime_ms"], 42);
+        assert!(value["aqi"].is_number());
+        let empty = live_reading_json(&readings(None, None), 1);
+        assert!(empty.contains("\"pm2_5\":null"));
+        assert!(!empty.contains('\n'), "must fit on one BLE line");
     }
 
     #[test]
