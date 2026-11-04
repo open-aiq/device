@@ -37,7 +37,7 @@ The default controller is SH1106:
 ```sh
 OLED_CONTROLLER=sh1106 cargo build --release
 OLED_CONTROLLER=ssd1306 cargo build --release
-make format
+make format:fix
 make verify HOST_TARGET=aarch64-apple-darwin
 ```
 
