@@ -7,6 +7,7 @@ pub mod config;
 pub mod device_api;
 pub mod devlog;
 pub mod display;
+pub mod ota;
 pub mod sensors;
 pub mod storage;
 pub mod telemetry;
