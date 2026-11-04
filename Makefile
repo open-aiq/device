@@ -7,11 +7,19 @@ OLED_CONTROLLER ?= sh1106
 DEVICE_TARGET   ?= xtensa-esp32s3-espidf
 FIRMWARE        ?= target/$(DEVICE_TARGET)/release/device_rust
 
+# OTA partition table and the ESP-IDF bootloader built with rollback support.
+# espflash otherwise substitutes its own single-app table and bootloader.
+PARTITIONS  ?= partitions.csv
+# Newest build wins: stale esp-idf-sys output dirs may hold a bootloader without rollback.
+BOOTLOADER  ?= $(shell ls -t target/$(DEVICE_TARGET)/release/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin 2>/dev/null | head -1)
+IMAGE       ?= target/$(DEVICE_TARGET)/release/device_rust.bin
+FLASH_ARGS   = --partition-table $(PARTITIONS) $(if $(BOOTLOADER),--bootloader $(BOOTLOADER))
+
 # Serial port for flashing and monitoring; espflash auto-detects it when unset.
 PORT ?=
 PORT_ARG := $(if $(PORT),--port $(PORT))
 
-.PHONY: help format\:fix format\:check test lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 board\:info monitor
+.PHONY: help format\:fix format\:check test lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 image board\:info monitor
 
 ## help: Show available commands
 help:
@@ -72,7 +80,7 @@ build\:ssd1306:
 
 ## flash: Build, flash, and monitor the device — make flash [OLED_CONTROLLER=sh1106|ssd1306] [PORT=/dev/cu.usbmodem*]
 flash: build
-	$(ESPFLASH) flash --monitor $(PORT_ARG) $(FIRMWARE)
+	$(ESPFLASH) flash --monitor $(PORT_ARG) $(FLASH_ARGS) $(FIRMWARE)
 
 ## flash:sh1106: Build and flash firmware for the SH1106 OLED — make flash:sh1106 [PORT=...]
 flash\:sh1106:
@@ -81,6 +89,12 @@ flash\:sh1106:
 ## flash:ssd1306: Build and flash firmware for the SSD1306 OLED — make flash:ssd1306 [PORT=...]
 flash\:ssd1306:
 	@$(MAKE) flash OLED_CONTROLLER=ssd1306
+
+## image: Build the OTA app image (.bin) and print its size and SHA-256 for a release
+image: build
+	$(ESPFLASH) save-image --chip esp32s3 --partition-table $(PARTITIONS) $(FIRMWARE) $(IMAGE)
+	@echo "size:   $$(wc -c < $(IMAGE) | tr -d ' ')"
+	@echo "sha256: $$(shasum -a 256 $(IMAGE) | cut -d ' ' -f 1)"
 
 ## board:info: Print chip and flash size of the attached board (read-only)
 board\:info:
