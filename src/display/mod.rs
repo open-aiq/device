@@ -54,12 +54,34 @@ impl Screen {
     }
 }
 
+/// Full-screen states that temporarily replace the normal screens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Overlay {
+    Pairing {
+        remaining_s: u64,
+        passkey: Option<u32>,
+        connected: bool,
+    },
+    Updating {
+        percent: u8,
+    },
+}
+
 pub struct ScreenModel<'a> {
     pub screen: Screen,
     pub readings: Option<&'a SensorReadings>,
     pub wifi: &'a WifiStatus,
     pub last_upload: Option<(UploadResult, u64)>,
     pub now_ms: u64,
+    pub overlay: Option<Overlay>,
+    /// Whether WiFi and device credentials are provisioned; drives the setup hint.
+    pub provisioned: bool,
+}
+
+/// Formats a passkey as `123 456` (always six digits).
+pub fn format_passkey(passkey: u32) -> String {
+    let digits = format!("{:06}", passkey % 1_000_000);
+    format!("{} {}", &digits[..3], &digits[3..])
 }
 
 pub trait DisplayPort {
@@ -176,6 +198,63 @@ where
         .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
         .draw(target);
 
+    match model.overlay {
+        Some(Overlay::Pairing {
+            remaining_s,
+            passkey,
+            connected,
+        }) => {
+            let _ = Text::with_text_style("PAIRING", Point::new(64, 4), small, center).draw(target);
+            match passkey {
+                Some(passkey) => {
+                    let _ = Text::with_text_style(
+                        &format_passkey(passkey),
+                        Point::new(64, 20),
+                        large,
+                        center,
+                    )
+                    .draw(target);
+                    let _ = Text::with_text_style(
+                        "Enter code on phone",
+                        Point::new(64, 46),
+                        small,
+                        center,
+                    )
+                    .draw(target);
+                }
+                None => {
+                    let state = if connected {
+                        "Phone connected"
+                    } else {
+                        "Open the app"
+                    };
+                    let _ = Text::with_text_style(state, Point::new(64, 24), small, center)
+                        .draw(target);
+                    let _ = Text::with_text_style(
+                        &format!("{}:{:02} left", remaining_s / 60, remaining_s % 60),
+                        Point::new(64, 44),
+                        small,
+                        center,
+                    )
+                    .draw(target);
+                }
+            }
+            return;
+        }
+        Some(Overlay::Updating { percent }) => {
+            message(
+                target,
+                &format!("{percent}%"),
+                "Updating, keep power",
+                large,
+                small,
+                center,
+            );
+            return;
+        }
+        None => {}
+    }
+
     match model.screen {
         Screen::Aqi => match model
             .readings
@@ -200,6 +279,14 @@ where
                 )
                 .draw(target);
             }
+            None if !model.provisioned => message(
+                target,
+                "AQI --",
+                "Hold both btns: pair",
+                large,
+                small,
+                center,
+            ),
             None => message(target, "AQI --", "warming up...", large, small, center),
         },
         Screen::Climate => match model.readings.and_then(|value| value.climate.as_ref()) {
@@ -249,8 +336,12 @@ where
                 ),
                 None => "Up: never".to_owned(),
             };
-            let _ =
-                Text::with_baseline("STATUS", Point::new(6, 6), small, Baseline::Top).draw(target);
+            let title = if model.provisioned {
+                "STATUS"
+            } else {
+                "SETUP: hold both btns"
+            };
+            let _ = Text::with_baseline(title, Point::new(6, 6), small, Baseline::Top).draw(target);
             let _ = Text::with_baseline(
                 &format!("WiFi {wifi}"),
                 Point::new(6, 25),
@@ -275,4 +366,54 @@ fn message<D: DrawTarget<Color = BinaryColor>>(
     let _ = Text::with_text_style(first, Point::new(64, 12), first_style, text_style).draw(target);
     let _ =
         Text::with_text_style(second, Point::new(64, 39), second_style, text_style).draw(target);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use embedded_graphics::mock_display::MockDisplay;
+
+    #[test]
+    fn formats_passkey_with_leading_zeros() {
+        assert_eq!(format_passkey(42), "000 042");
+        assert_eq!(format_passkey(123_456), "123 456");
+    }
+
+    #[test]
+    fn renders_every_overlay_and_screen_without_panicking() {
+        let wifi = WifiStatus::default();
+        let overlays = [
+            None,
+            Some(Overlay::Pairing {
+                remaining_s: 299,
+                passkey: None,
+                connected: false,
+            }),
+            Some(Overlay::Pairing {
+                remaining_s: 10,
+                passkey: Some(7),
+                connected: true,
+            }),
+            Some(Overlay::Updating { percent: 40 }),
+        ];
+        for overlay in overlays {
+            for screen in [Screen::Aqi, Screen::Climate, Screen::Status] {
+                let mut display: MockDisplay<BinaryColor> = MockDisplay::new();
+                display.set_allow_overdraw(true);
+                display.set_allow_out_of_bounds_drawing(true);
+                render(
+                    &mut display,
+                    &ScreenModel {
+                        screen,
+                        readings: None,
+                        wifi: &wifi,
+                        last_upload: None,
+                        now_ms: 0,
+                        overlay,
+                        provisioned: false,
+                    },
+                );
+            }
+        }
+    }
 }
