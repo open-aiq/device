@@ -16,12 +16,18 @@ and active-low buttons with internal pull-ups.
 
 | Device | Signal | ESP32-S3 GPIO |
 | --- | --- | --- |
-| OLED + SHT30 | SDA | 8 |
-| OLED + SHT30 | SCL | 9 |
-| PMS5003 | sensor TX -> ESP RX | 18 |
-| PMS5003 | sensor RX <- ESP TX | 17 |
-| Button | Right, active-low | 4 |
-| Button | Left, active-low | 5 |
+| OLED + SHT30 | SDA | 5 |
+| OLED + SHT30 | SCL | 4 |
+| PMS5003 | sensor TX -> ESP RX | 17 |
+| PMS5003 | sensor RX <- ESP TX | 18 |
+| PMS5003 | SET (pulled up on the board, not driven yet) | 8 |
+| PMS5003 | RESET (pulled up on the board, not driven yet) | 16 |
+| Button | Right, active-low | 15 |
+| Button | Left, active-low | 6 |
+| Button | Pair, active-low (not read yet) | 7 |
+
+These match the Proto2 rev B carrier board. Older breadboard builds used SDA 8,
+SCL 9, sensor TX 18, sensor RX 17, and buttons 4 (right) and 5 (left).
 
 Power the OLED and SHT30 at 3.3 V and ensure the shared I2C bus has pull-ups.
 The PMS5003 normally uses 5 V power; verify the module's UART logic levels.
