@@ -231,6 +231,7 @@ pub fn readings(pm: Option<PmReading>, climate: Option<ClimateReading>) -> Senso
 
 #[cfg(target_os = "espidf")]
 pub mod esp;
+pub mod schedule;
 
 #[cfg(test)]
 mod tests {
