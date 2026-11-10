@@ -434,6 +434,11 @@ fn main() -> anyhow::Result<()> {
                 Pairing::Closed
             };
             status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
+            status.aqi = state
+                .latest
+                .as_ref()
+                .and_then(|readings| readings.aqi)
+                .map(|aqi| aqi.category);
             status.pms = if !pms_duty.is_awake() {
                 PmsState::Asleep
             } else if pms_duty.counts_frames(now_ms) {
