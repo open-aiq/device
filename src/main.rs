@@ -229,7 +229,18 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         BleOutcome::Live(enabled) => state.live = enabled,
-                        BleOutcome::OtaCheck => ota_check_requested = true,
+                        BleOutcome::OtaCheck => {
+                            // A check needs WiFi, and waits while a new
+                            // image is being verified. Answer now if it
+                            // can't run; the next good upload checks anyway.
+                            if pending_verify {
+                                send(&mut ble, "OTA:NONE");
+                            } else if !wifi.status().connected {
+                                send(&mut ble, "OTA:FAILED");
+                            } else {
+                                ota_check_requested = true;
+                            }
+                        }
                     }
                 }
                 BleEvent::Connected => {
@@ -530,6 +541,9 @@ fn run_ota_cycle(
         Ok(job) => job,
         Err(error) => {
             log::warn!("OTA check failed: {error:#}");
+            if state.pairing.is_connected() {
+                send(ble, "OTA:FAILED");
+            }
             return;
         }
     };
@@ -546,6 +560,9 @@ fn run_ota_cycle(
                 config,
                 &report(&job.job_id, JobStatus::Succeeded, Some(100), None),
             );
+            if connected {
+                send(ble, "OTA:NONE");
+            }
         }
         OtaDecision::ReportRolledBack(job) => {
             log::error!(target: "event::ota", "update to {} rolled back", job.version);
@@ -554,6 +571,9 @@ fn run_ota_cycle(
                 config,
                 &report(&job.job_id, JobStatus::Failed, None, Some(error)),
             );
+            if connected {
+                send(ble, "OTA:NONE");
+            }
         }
         OtaDecision::Install(job) => {
             event!("ota", "installing {} ({} bytes)", job.version, job.size);
@@ -566,6 +586,9 @@ fn run_ota_cycle(
             );
             if accepted == Some(409) {
                 log::warn!(target: "event::ota", "update to {} was cancelled", job.version);
+                if connected {
+                    send(ble, "OTA:NONE");
+                }
                 return;
             }
             state.ota_progress = Some(0);
