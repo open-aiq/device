@@ -1,3 +1,8 @@
+#[path = "bands.g.rs"]
+mod bands;
+
+pub use bands::{Band, BANDS};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqiCategory {
     Good,
@@ -9,15 +14,28 @@ pub enum AqiCategory {
 }
 
 impl AqiCategory {
+    pub const ALL: [Self; 6] = [
+        Self::Good,
+        Self::Moderate,
+        Self::UnhealthySensitive,
+        Self::Unhealthy,
+        Self::VeryUnhealthy,
+        Self::Hazardous,
+    ];
+
+    /// Position in [`BANDS`], from 0 (Good) to 5 (Hazardous).
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The band's name, shared with the app, dashboard and docs.
     pub const fn label(self) -> &'static str {
-        match self {
-            Self::Good => "Good",
-            Self::Moderate => "Moderate",
-            Self::UnhealthySensitive => "Unhealthy Sensitive",
-            Self::Unhealthy => "Unhealthy",
-            Self::VeryUnhealthy => "Very Unhealthy",
-            Self::Hazardous => "Hazardous",
-        }
+        BANDS[self.index()].label
+    }
+
+    /// The band's colour as `(r, g, b)`.
+    pub const fn colour(self) -> (u8, u8, u8) {
+        BANDS[self.index()].rgb
     }
 }
 
@@ -179,6 +197,22 @@ mod tests {
             AqiCategory::UnhealthySensitive
         );
         assert_eq!(compute_us_aqi(400, 900).aqi, 500);
+    }
+
+    #[test]
+    fn breakpoints_line_up_with_the_token_bands() {
+        for table in [&PM25, &PM10] {
+            for (bp, band) in table.iter().zip(BANDS) {
+                assert_eq!(BANDS[bp.category.index()], band);
+                // The top band is open-ended in the tokens and capped at 500 here.
+                assert_eq!(band.max.unwrap_or(500), bp.i_high);
+            }
+        }
+        assert_eq!(
+            AqiCategory::UnhealthySensitive.label(),
+            "Slightly Unhealthy"
+        );
+        assert_eq!(AqiCategory::ALL.len(), BANDS.len());
     }
 
     #[test]
