@@ -153,7 +153,8 @@ fn main() -> anyhow::Result<()> {
         live: false,
         ota_progress: None,
     };
-    let mut last_climate_ms = 0;
+    // `None` until the first read, which happens on the first pass.
+    let mut last_climate_ms: Option<u64> = None;
     let mut latest_pm = None;
     // Board::new leaves the PMS5003 running, which is how every cycle starts.
     let mut pms_duty = PmsDutyCycle::new_awake(0);
@@ -303,8 +304,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        if now_ms.saturating_sub(last_climate_ms) >= CLIMATE_INTERVAL_MS {
-            last_climate_ms = now_ms;
+        let climate_due = match last_climate_ms {
+            Some(at_ms) => now_ms.saturating_sub(at_ms) >= CLIMATE_INTERVAL_MS,
+            None => true,
+        };
+        if climate_due {
+            last_climate_ms = Some(now_ms);
             // PM from the latest burst; it stays on screen while the sensor rests.
             let pm = latest_pm.clone();
             let climate = match &sht30 {
