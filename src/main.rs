@@ -22,7 +22,10 @@ use device_rust::{
     event,
     ota::{self, JobStatus, OtaDecision, StatusReport, VERIFY_DEADLINE_MS},
     sensors::{
-        esp::SharedI2c, readings, I2cBus, SensorReadings, Sht30, OLED_ADDRESSES, SHT30_ADDRESSES,
+        esp::SharedI2c,
+        readings,
+        schedule::{PmsAction, PmsDutyCycle},
+        I2cBus, SensorReadings, Sht30, OLED_ADDRESSES, SHT30_ADDRESSES,
     },
     storage::{esp::NvsConfigStore, ConfigStore},
     telemetry::{
@@ -142,6 +145,9 @@ fn main() -> anyhow::Result<()> {
     };
     let mut last_climate_ms = 0;
     let mut latest_pm = None;
+    // Board::new leaves the PMS5003 running, which is how every cycle starts.
+    let mut pms_duty = PmsDutyCycle::new_awake(0);
+    let mut burst_frames: u32 = 0;
     let mut last_upload_tick_ms = 0;
     let mut last_render_ms = 0;
     let mut boot_logs_sent = false;
@@ -239,19 +245,45 @@ fn main() -> anyhow::Result<()> {
             dirty = true;
         }
 
-        match pms5003.poll() {
-            Ok(Some(pm)) => {
-                aggregator.add_pm(&pm);
-                latest_pm = Some(pm);
+        // PM: rest the sensor between bursts and average only settled frames.
+        match pms_duty.tick(now_ms) {
+            PmsAction::Wake => {
+                if let Err(error) = pms5003.wake() {
+                    log::warn!("PMS5003 wake failed: {error:?}");
+                }
+                log::info!("PMS5003 awake, warming up");
             }
-            Ok(None) => {}
-            Err(error) => log::warn!("PMS5003 read failed: {error:?}"),
+            PmsAction::Sleep => {
+                if let Err(error) = pms5003.sleep() {
+                    log::warn!("PMS5003 sleep failed: {error:?}");
+                }
+                log::info!("PMS5003 asleep after {burst_frames} frames");
+                if burst_frames == 0 {
+                    // Don't keep showing a reading from an earlier burst.
+                    latest_pm = None;
+                    log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst");
+                }
+                burst_frames = 0;
+            }
+            PmsAction::Nothing => {}
+        }
+        if pms_duty.is_awake() {
+            match pms5003.poll() {
+                Ok(Some(pm)) if pms_duty.counts_frames(now_ms) => {
+                    aggregator.add_pm(&pm);
+                    latest_pm = Some(pm);
+                    burst_frames += 1;
+                }
+                // Nothing yet, or the fan is still settling.
+                Ok(_) => {}
+                Err(error) => log::warn!("PMS5003 read failed: {error:?}"),
+            }
         }
 
         if now_ms.saturating_sub(last_climate_ms) >= CLIMATE_INTERVAL_MS {
             last_climate_ms = now_ms;
-            // Show PM only if a frame arrived since the last refresh.
-            let pm = latest_pm.take();
+            // PM from the latest burst; it stays on screen while the sensor rests.
+            let pm = latest_pm.clone();
             let climate = match &sht30 {
                 Some(sensor) => match sensor.read() {
                     Ok(value) => Some(value),
@@ -276,7 +308,9 @@ fn main() -> anyhow::Result<()> {
             dirty = true;
         }
 
-        let upload_due = aggregator.complete()
+        // Only while the sensor rests, so a burst is never split across uploads.
+        let upload_due = !pms_duty.is_awake()
+            && aggregator.complete()
             && (last_upload_tick_ms == 0
                 || now_ms.saturating_sub(last_upload_tick_ms) >= UPLOAD_INTERVAL_MS);
         if upload_due {
