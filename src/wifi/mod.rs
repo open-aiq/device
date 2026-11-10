@@ -8,12 +8,13 @@ pub struct WifiStatus {
     pub rssi: Option<i8>,
 }
 
-/// Signal strength as 0–4 bars, for the screen.
+/// Signal strength as 0–4 bars, for the screen. The cutoffs match the app's
+/// network list (`bars` in `app/lib/ble/protocol.dart`).
 pub fn signal_bars(rssi: i8) -> u8 {
     match rssi {
         -55.. => 4,
-        -67..=-56 => 3,
-        -75..=-68 => 2,
+        -65..=-56 => 3,
+        -75..=-66 => 2,
         -85..=-76 => 1,
         _ => 0,
     }
@@ -98,7 +99,11 @@ mod tests {
         assert_eq!(signal_bars(-40), 4);
         assert_eq!(signal_bars(-55), 4);
         assert_eq!(signal_bars(-56), 3);
-        assert_eq!(signal_bars(-70), 2);
+        assert_eq!(signal_bars(-65), 3);
+        assert_eq!(signal_bars(-66), 2);
+        assert_eq!(signal_bars(-75), 2);
+        assert_eq!(signal_bars(-76), 1);
+        assert_eq!(signal_bars(-85), 1);
         assert_eq!(signal_bars(-80), 1);
         assert_eq!(signal_bars(-86), 0);
         assert_eq!(signal_bars(i8::MIN), 0);
