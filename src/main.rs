@@ -20,7 +20,7 @@ use device_rust::{
         format_passkey, DisplayPort, OledDisplay, Overlay, Screen, ScreenModel, SELECTED_CONTROLLER,
     },
     event,
-    led::{Fault, PmsState},
+    led::{esp::LedHandle, Fault, Pairing, PmsState},
     ota::{self, JobStatus, OtaDecision, StatusReport, VERIFY_DEADLINE_MS},
     sensors::{
         esp::SharedI2c,
@@ -230,6 +230,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 BleEvent::PairingFinished { ok } => {
                     state.pairing.on_pairing_finished();
+                    led.pairing_finished(ok);
                     if ok {
                         event!("ble", "pairing succeeded");
                     } else {
@@ -396,6 +397,7 @@ fn main() -> anyhow::Result<()> {
             ota_check_requested = false;
             run_ota_cycle(
                 &device_config,
+                &led,
                 &mut display,
                 &mut state,
                 &wifi,
@@ -423,6 +425,14 @@ fn main() -> anyhow::Result<()> {
         }
         let wifi_connected = wifi.status().connected;
         led.update(|status| {
+            status.ota = state.ota_progress.is_some();
+            status.pairing = if state.pairing.is_connected() {
+                Pairing::Connected
+            } else if state.pairing.is_open() {
+                Pairing::Open
+            } else {
+                Pairing::Closed
+            };
             status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
             status.pms = if !pms_duty.is_awake() {
                 PmsState::Asleep
@@ -481,6 +491,7 @@ fn apply_pairing(ble: &mut NimbleTransport, action: Option<PairingAction>) {
 
 fn run_ota_cycle(
     config: &DeviceConfig,
+    led: &LedHandle,
     display: &mut Display,
     state: &mut State,
     wifi: &EspWifiPort<'_>,
@@ -530,6 +541,8 @@ fn run_ota_cycle(
                 return;
             }
             state.ota_progress = Some(0);
+            // The main loop blocks during the download; the LED thread keeps breathing.
+            led.update(|status| status.ota = true);
             render(display, state, wifi, config, now_ms);
             let result = ota::esp::install(&job, &mut |percent| {
                 state.ota_progress = Some(percent);
@@ -551,6 +564,7 @@ fn run_ota_cycle(
                 }
                 Err(error) => {
                     state.ota_progress = None;
+                    led.update(|status| status.ota = false);
                     log::error!(target: "event::ota", "update to {} failed: {error:#}", job.version);
                     let message = format!("{error:#}");
                     ota::esp::report(
