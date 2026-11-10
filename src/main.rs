@@ -20,7 +20,7 @@ use device_rust::{
         format_passkey, DisplayPort, OledDisplay, Overlay, Screen, ScreenModel, SELECTED_CONTROLLER,
     },
     event,
-    led::Fault,
+    led::{Fault, PmsState},
     ota::{self, JobStatus, OtaDecision, StatusReport, VERIFY_DEADLINE_MS},
     sensors::{
         esp::SharedI2c,
@@ -115,7 +115,7 @@ fn main() -> anyhow::Result<()> {
         });
 
     // Faults found at boot show on the LED while WiFi connects.
-    let sht30_failed = sht30.is_none();
+    let mut sht30_failed = sht30.is_none();
     led.update(|status| {
         status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
         status.faults.set(Fault::Sht30, sht30_failed);
@@ -158,6 +158,9 @@ fn main() -> anyhow::Result<()> {
     // Board::new leaves the PMS5003 running, which is how every cycle starts.
     let mut pms_duty = PmsDutyCycle::new_awake(0);
     let mut burst_frames: u32 = 0;
+    // A burst with no frames, or reads failing in a row, lights fault code 1.
+    let mut pms_silent = false;
+    let mut pms_errors: u32 = 0;
     let mut last_upload_tick_ms = 0;
     let mut last_render_ms = 0;
     let mut boot_logs_sent = false;
@@ -271,6 +274,7 @@ fn main() -> anyhow::Result<()> {
                 if burst_frames == 0 {
                     // Don't keep showing a reading from an earlier burst.
                     latest_pm = None;
+                    pms_silent = true;
                     log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst");
                 }
                 burst_frames = 0;
@@ -283,10 +287,18 @@ fn main() -> anyhow::Result<()> {
                     aggregator.add_pm(&pm);
                     latest_pm = Some(pm);
                     burst_frames += 1;
+                    pms_silent = false;
+                    pms_errors = 0;
+                    led.frame();
                 }
-                // Nothing yet, or the fan is still settling.
-                Ok(_) => {}
-                Err(error) => log::warn!("PMS5003 read failed: {error:?}"),
+                // The fan is still settling.
+                Ok(Some(_)) => pms_errors = 0,
+                // Nothing yet.
+                Ok(None) => {}
+                Err(error) => {
+                    pms_errors = pms_errors.saturating_add(1);
+                    log::warn!("PMS5003 read failed: {error:?}");
+                }
             }
         }
 
@@ -296,8 +308,12 @@ fn main() -> anyhow::Result<()> {
             let pm = latest_pm.clone();
             let climate = match &sht30 {
                 Some(sensor) => match sensor.read() {
-                    Ok(value) => Some(value),
+                    Ok(value) => {
+                        sht30_failed = false;
+                        Some(value)
+                    }
                     Err(error) => {
+                        sht30_failed = true;
                         log::warn!("SHT30 read failed: {error:?}");
                         None
                     }
@@ -405,6 +421,29 @@ fn main() -> anyhow::Result<()> {
             last_render_ms = now_ms;
             render(&mut display, &state, &wifi, &device_config, now_ms);
         }
+        let wifi_connected = wifi.status().connected;
+        led.update(|status| {
+            status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
+            status.pms = if !pms_duty.is_awake() {
+                PmsState::Asleep
+            } else if pms_duty.counts_frames(now_ms) {
+                PmsState::Sampling
+            } else {
+                PmsState::WarmingUp
+            };
+            let faults = &mut status.faults;
+            faults.set(Fault::PmsSilent, pms_silent || pms_errors >= 5);
+            faults.set(Fault::Sht30, sht30_failed);
+            faults.set(Fault::Oled, display.is_none());
+            faults.set(Fault::Wifi, device_config.has_wifi() && !wifi_connected);
+            faults.set(
+                Fault::Upload,
+                wifi_connected
+                    && device_config.has_device_credentials()
+                    && state.last_upload.is_some_and(|(result, _)| !result.ok),
+            );
+            faults.set(Fault::OtaUnverified, pending_verify);
+        });
         FreeRtos::delay_ms(50);
     }
 }
