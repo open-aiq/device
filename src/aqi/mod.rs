@@ -1,23 +1,41 @@
+#[path = "bands.g.rs"]
+mod bands;
+
+pub use bands::{Band, BANDS};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqiCategory {
     Good,
     Moderate,
-    UnhealthySensitive,
+    SlightlyUnhealthy,
     Unhealthy,
     VeryUnhealthy,
     Hazardous,
 }
 
 impl AqiCategory {
+    pub const ALL: [Self; 6] = [
+        Self::Good,
+        Self::Moderate,
+        Self::SlightlyUnhealthy,
+        Self::Unhealthy,
+        Self::VeryUnhealthy,
+        Self::Hazardous,
+    ];
+
+    /// Position in [`BANDS`], from 0 (Good) to 5 (Hazardous).
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The band's name, shared with the app, dashboard and docs.
     pub const fn label(self) -> &'static str {
-        match self {
-            Self::Good => "Good",
-            Self::Moderate => "Moderate",
-            Self::UnhealthySensitive => "Unhealthy Sensitive",
-            Self::Unhealthy => "Unhealthy",
-            Self::VeryUnhealthy => "Very Unhealthy",
-            Self::Hazardous => "Hazardous",
-        }
+        BANDS[self.index()].label
+    }
+
+    /// The band's colour as `(r, g, b)`.
+    pub const fn colour(self) -> (u8, u8, u8) {
+        BANDS[self.index()].rgb
     }
 }
 
@@ -63,7 +81,7 @@ const PM25: [Breakpoint; 6] = [
         high: 55.4,
         i_low: 101,
         i_high: 150,
-        category: AqiCategory::UnhealthySensitive,
+        category: AqiCategory::SlightlyUnhealthy,
     },
     Breakpoint {
         low: 55.5,
@@ -108,7 +126,7 @@ const PM10: [Breakpoint; 6] = [
         high: 254.0,
         i_low: 101,
         i_high: 150,
-        category: AqiCategory::UnhealthySensitive,
+        category: AqiCategory::SlightlyUnhealthy,
     },
     Breakpoint {
         low: 255.0,
@@ -176,9 +194,22 @@ mod tests {
         assert_eq!(compute_us_aqi(9, 0).aqi, 50);
         assert_eq!(
             compute_us_aqi(36, 0).category,
-            AqiCategory::UnhealthySensitive
+            AqiCategory::SlightlyUnhealthy
         );
         assert_eq!(compute_us_aqi(400, 900).aqi, 500);
+    }
+
+    #[test]
+    fn breakpoints_line_up_with_the_token_bands() {
+        for table in [&PM25, &PM10] {
+            for (bp, band) in table.iter().zip(BANDS) {
+                assert_eq!(BANDS[bp.category.index()], band);
+                // The top band is open-ended in the tokens and capped at 500 here.
+                assert_eq!(band.max.unwrap_or(500), bp.i_high);
+            }
+        }
+        assert_eq!(AqiCategory::SlightlyUnhealthy.label(), "Slightly Unhealthy");
+        assert_eq!(AqiCategory::ALL.len(), BANDS.len());
     }
 
     #[test]

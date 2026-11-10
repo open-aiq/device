@@ -32,7 +32,7 @@ use device_rust::{
     telemetry::{
         esp::EspTelemetrySink, live_reading_json, Aggregator, TelemetrySink, UploadResult,
     },
-    wifi::{esp::EspWifiPort, WifiPort},
+    wifi::{esp::EspWifiPort, WifiPort, WifiStatus},
     CLIMATE_INTERVAL_MS, FIRMWARE_VERSION, UPLOAD_INTERVAL_MS,
 };
 
@@ -114,6 +114,24 @@ fn main() -> anyhow::Result<()> {
             }
         });
 
+    // Something to look at while WiFi connects, which can take a few seconds.
+    if let Some(oled) = &mut display {
+        let starting = ScreenModel {
+            screen: Screen::Aqi,
+            readings: None,
+            wifi: &WifiStatus::default(),
+            ssid: "",
+            version: FIRMWARE_VERSION,
+            last_upload: None,
+            now_ms: 0,
+            overlay: Some(Overlay::Starting),
+            provisioned: false,
+        };
+        if let Err(error) = oled.show(&starting) {
+            log::error!("OLED update failed: {error:?}");
+        }
+    }
+
     // Faults found at boot show on the LED while WiFi connects.
     let mut sht30_failed = sht30.is_none();
     led.update(|status| {
@@ -153,7 +171,8 @@ fn main() -> anyhow::Result<()> {
         live: false,
         ota_progress: None,
     };
-    let mut last_climate_ms = 0;
+    // `None` until the first read, which happens on the first pass.
+    let mut last_climate_ms: Option<u64> = None;
     let mut latest_pm = None;
     // Board::new leaves the PMS5003 running, which is how every cycle starts.
     let mut pms_duty = PmsDutyCycle::new_awake(0);
@@ -303,8 +322,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        if now_ms.saturating_sub(last_climate_ms) >= CLIMATE_INTERVAL_MS {
-            last_climate_ms = now_ms;
+        let climate_due = match last_climate_ms {
+            Some(at_ms) => now_ms.saturating_sub(at_ms) >= CLIMATE_INTERVAL_MS,
+            None => true,
+        };
+        if climate_due {
+            last_climate_ms = Some(now_ms);
             // PM from the latest burst; it stays on screen while the sensor rests.
             let pm = latest_pm.clone();
             let climate = match &sht30 {
@@ -434,6 +457,11 @@ fn main() -> anyhow::Result<()> {
                 Pairing::Closed
             };
             status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
+            status.aqi = state
+                .latest
+                .as_ref()
+                .and_then(|readings| readings.aqi)
+                .map(|aqi| aqi.category);
             status.pms = if !pms_duty.is_awake() {
                 PmsState::Asleep
             } else if pms_duty.counts_frames(now_ms) {
@@ -653,6 +681,8 @@ fn render(
         screen: state.screen,
         readings: state.latest.as_ref(),
         wifi: &status,
+        ssid: &config.ssid,
+        version: FIRMWARE_VERSION,
         last_upload: state.last_upload,
         now_ms,
         overlay,

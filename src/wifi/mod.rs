@@ -4,6 +4,20 @@ use crate::config::DeviceConfig;
 pub struct WifiStatus {
     pub connected: bool,
     pub ip: Option<String>,
+    /// Signal strength of the connected network, in dBm.
+    pub rssi: Option<i8>,
+}
+
+/// Signal strength as 0–4 bars, for the screen. The cutoffs match the app's
+/// network list (`bars` in `app/lib/ble/protocol.dart`).
+pub fn signal_bars(rssi: i8) -> u8 {
+    match rssi {
+        -55.. => 4,
+        -65..=-56 => 3,
+        -75..=-66 => 2,
+        -85..=-76 => 1,
+        _ => 0,
+    }
 }
 
 /// One network found by a scan, as reported over BLE (`NET:<rssi>,<open|secured>,<ssid>`).
@@ -78,6 +92,21 @@ mod tests {
         assert_eq!(result[0], net("cafe", -40));
         assert_eq!(result[1], net("home", -50));
         assert!(result.iter().all(|n| !n.ssid.is_empty()));
+    }
+
+    #[test]
+    fn signal_bars_cover_the_range() {
+        assert_eq!(signal_bars(-40), 4);
+        assert_eq!(signal_bars(-55), 4);
+        assert_eq!(signal_bars(-56), 3);
+        assert_eq!(signal_bars(-65), 3);
+        assert_eq!(signal_bars(-66), 2);
+        assert_eq!(signal_bars(-75), 2);
+        assert_eq!(signal_bars(-76), 1);
+        assert_eq!(signal_bars(-85), 1);
+        assert_eq!(signal_bars(-80), 1);
+        assert_eq!(signal_bars(-86), 0);
+        assert_eq!(signal_bars(i8::MIN), 0);
     }
 
     #[test]
