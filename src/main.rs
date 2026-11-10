@@ -20,6 +20,7 @@ use device_rust::{
         format_passkey, DisplayPort, OledDisplay, Overlay, Screen, ScreenModel, SELECTED_CONTROLLER,
     },
     event,
+    led::Fault,
     ota::{self, JobStatus, OtaDecision, StatusReport, VERIFY_DEADLINE_MS},
     sensors::{
         esp::SharedI2c,
@@ -89,6 +90,7 @@ fn main() -> anyhow::Result<()> {
         shared_i2c,
         mut pms5003,
         buttons: gpio_buttons,
+        led,
     } = Board::new(peripherals.pins, peripherals.i2c0, peripherals.uart1)?;
     let mut buttons = CombinedButtons {
         first: gpio_buttons,
@@ -111,6 +113,14 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
+
+    // Faults found at boot show on the LED while WiFi connects.
+    let sht30_failed = sht30.is_none();
+    led.update(|status| {
+        status.provisioned = device_config.has_wifi() && device_config.has_device_credentials();
+        status.faults.set(Fault::Sht30, sht30_failed);
+        status.faults.set(Fault::Oled, display.is_none());
+    });
 
     let mut wifi = EspWifiPort::new(peripherals.modem, event_loop, nvs_partition)?;
     match wifi.connect(&device_config) {
