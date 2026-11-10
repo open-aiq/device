@@ -395,7 +395,12 @@ where
         "Offline".to_owned()
     };
     text(target, &address, MARGIN, 15, SMALL, Alignment::Left);
-    let upload = fit(&upload_line(model.last_upload, model.now_ms), 20);
+    // Nothing can be sent before setup, so a failed upload isn't news then.
+    let upload = if model.provisioned {
+        fit(&upload_line(model.last_upload, model.now_ms), 20)
+    } else {
+        "Not set up yet".to_owned()
+    };
     text(target, &upload, MARGIN, 29, SMALL, Alignment::Left);
 
     let _ = Line::new(Point::new(0, 43), Point::new(RIGHT, 43))
@@ -825,6 +830,26 @@ mod tests {
                 assert!(block.iter().all(|lit| *lit == block[0]), "at {x},{y}");
             }
         }
+    }
+
+    #[test]
+    fn network_screen_skips_upload_failures_before_setup() {
+        let wifi = online();
+        let failed = Some((UploadResult::default(), 0));
+        let unprovisioned = |last_upload| {
+            Frame::of(&ScreenModel {
+                last_upload,
+                provisioned: false,
+                ..model(Screen::Network, None, &wifi)
+            })
+            .lit
+        };
+        assert_eq!(unprovisioned(failed), unprovisioned(None));
+        let provisioned = Frame::of(&ScreenModel {
+            last_upload: failed,
+            ..model(Screen::Network, None, &wifi)
+        });
+        assert_ne!(provisioned.lit, unprovisioned(failed));
     }
 
     #[test]
