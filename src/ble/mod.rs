@@ -117,8 +117,12 @@ impl CommandFramer {
             if line.is_empty() {
                 continue;
             }
-            let value = std::str::from_utf8(&line).map_err(|_| FrameError::Utf8)?;
-            commands.push(parse_command(value));
+            // A bad line is reported in place, so the commands around it
+            // still run.
+            commands.push(match std::str::from_utf8(&line) {
+                Ok(value) => parse_command(value),
+                Err(_) => Command::ProtocolError(FrameError::Utf8),
+            });
         }
         Ok(commands)
     }
@@ -346,6 +350,19 @@ mod tests {
         for bad in ["LON:abc", "LON:-180.5", "LON:NaN"] {
             assert_eq!(parse_command(bad), Command::Invalid("LON"), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_bad_line_does_not_drop_its_neighbours() {
+        let mut framer = CommandFramer::default();
+        assert_eq!(
+            framer.push(b"PING\n\xff\xfe\nINFO\n").unwrap(),
+            vec![
+                Command::Ping,
+                Command::ProtocolError(FrameError::Utf8),
+                Command::Info
+            ]
+        );
     }
 
     #[test]
