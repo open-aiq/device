@@ -141,6 +141,7 @@ fn main() -> anyhow::Result<()> {
         ota_progress: None,
     };
     let mut last_climate_ms = 0;
+    let mut latest_pm = None;
     let mut last_upload_tick_ms = 0;
     let mut last_render_ms = 0;
     let mut boot_logs_sent = false;
@@ -238,15 +239,19 @@ fn main() -> anyhow::Result<()> {
             dirty = true;
         }
 
+        match pms5003.poll() {
+            Ok(Some(pm)) => {
+                aggregator.add_pm(&pm);
+                latest_pm = Some(pm);
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("PMS5003 read failed: {error:?}"),
+        }
+
         if now_ms.saturating_sub(last_climate_ms) >= CLIMATE_INTERVAL_MS {
             last_climate_ms = now_ms;
-            let pm = match pms5003.read() {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    log::warn!("PMS5003 read failed: {error:?}");
-                    None
-                }
-            };
+            // Show PM only if a frame arrived since the last refresh.
+            let pm = latest_pm.take();
             let climate = match &sht30 {
                 Some(sensor) => match sensor.read() {
                     Ok(value) => Some(value),
@@ -257,9 +262,6 @@ fn main() -> anyhow::Result<()> {
                 },
                 None => None,
             };
-            if let Some(pm) = &pm {
-                aggregator.add_pm(pm);
-            }
             if let Some(climate) = &climate {
                 aggregator.add_climate(climate);
             }

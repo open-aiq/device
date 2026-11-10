@@ -1,8 +1,15 @@
 use std::sync::{Arc, Mutex};
 
-use esp_idf_svc::hal::{delay::BLOCK, i2c::I2cDriver, uart::UartDriver};
+use esp_idf_svc::{
+    hal::{
+        delay::{BLOCK, NON_BLOCK},
+        i2c::I2cDriver,
+        uart::UartDriver,
+    },
+    sys::ESP_ERR_TIMEOUT,
+};
 
-use crate::sensors::{parse_pms5003_frame, I2cBus, PmReading, SensorError};
+use crate::sensors::{I2cBus, PmReading, Pms5003Framer, SensorError, PMS5003_FRAME_LEN};
 
 #[derive(Clone)]
 pub struct SharedI2c(pub Arc<Mutex<I2cDriver<'static>>>);
@@ -26,34 +33,29 @@ impl I2cBus for SharedI2c {
 
 pub struct Pms5003 {
     uart: UartDriver<'static>,
-    buffer: Vec<u8>,
+    framer: Pms5003Framer,
 }
 
 impl Pms5003 {
     pub fn new(uart: UartDriver<'static>) -> Self {
         Self {
             uart,
-            buffer: Vec::with_capacity(64),
+            framer: Pms5003Framer::default(),
         }
     }
 
-    pub fn read(&mut self) -> Result<PmReading, SensorError> {
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_secs(3) {
-            let mut bytes = [0u8; 32];
-            let count = self
-                .uart
-                .read(&mut bytes, 100)
-                .map_err(|_| SensorError::Bus)?;
-            self.buffer.extend_from_slice(&bytes[..count]);
-            while self.buffer.len() >= 2 && self.buffer[..2] != [0x42, 0x4d] {
-                self.buffer.remove(0);
-            }
-            if self.buffer.len() >= 32 {
-                let frame: Vec<u8> = self.buffer.drain(..32).collect();
-                return parse_pms5003_frame(&frame);
-            }
+    /// Returns the next frame if a whole one has arrived, without waiting.
+    ///
+    /// In active mode the sensor sends a frame every 2.3 s, or every
+    /// 200–800 ms while the air is changing fast (`docs/datasheets/`, page 4).
+    pub fn poll(&mut self) -> Result<Option<PmReading>, SensorError> {
+        let mut bytes = [0u8; 2 * PMS5003_FRAME_LEN];
+        match self.uart.read(&mut bytes, NON_BLOCK) {
+            Ok(count) => self.framer.push(&bytes[..count]),
+            // A non-blocking read reports "no bytes waiting" as a timeout.
+            Err(error) if error.code() == ESP_ERR_TIMEOUT => {}
+            Err(_) => return Err(SensorError::Bus),
         }
-        Err(SensorError::Timeout)
+        self.framer.next_frame().transpose()
     }
 }

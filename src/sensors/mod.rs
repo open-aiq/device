@@ -86,9 +86,52 @@ pub struct SensorReadings {
     pub aqi: Option<AqiResult>,
 }
 
+/// Length of one PMS5003 data frame, from header to checksum.
+pub const PMS5003_FRAME_LEN: usize = 32;
+const PMS5003_HEADER: [u8; 2] = [0x42, 0x4d];
+
+/// Collects bytes from the PMS5003's UART and cuts them into frames.
+///
+/// Bytes before a frame header are dropped, so it finds its way back after
+/// noise or a lost byte.
+#[derive(Default)]
+pub struct Pms5003Framer {
+    buffer: Vec<u8>,
+}
+
+impl Pms5003Framer {
+    pub fn push(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    /// Returns the next whole frame, or `None` until one has arrived.
+    pub fn next_frame(&mut self) -> Option<Result<PmReading, SensorError>> {
+        match self
+            .buffer
+            .windows(PMS5003_HEADER.len())
+            .position(|pair| pair == PMS5003_HEADER)
+        {
+            Some(start) => {
+                self.buffer.drain(..start);
+            }
+            None => {
+                // Keep a trailing first header byte; its partner may be next.
+                let keep = usize::from(self.buffer.last() == Some(&PMS5003_HEADER[0]));
+                let drop = self.buffer.len() - keep;
+                self.buffer.drain(..drop);
+            }
+        }
+        if self.buffer.len() < PMS5003_FRAME_LEN {
+            return None;
+        }
+        let frame: Vec<u8> = self.buffer.drain(..PMS5003_FRAME_LEN).collect();
+        Some(parse_pms5003_frame(&frame))
+    }
+}
+
 pub fn parse_pms5003_frame(frame: &[u8]) -> Result<PmReading, SensorError> {
-    if frame.len() != 32
-        || frame[0..2] != [0x42, 0x4d]
+    if frame.len() != PMS5003_FRAME_LEN
+        || frame[0..2] != PMS5003_HEADER
         || u16::from_be_bytes([frame[2], frame[3]]) != 28
     {
         return Err(SensorError::InvalidFrame);
@@ -223,15 +266,14 @@ mod tests {
         assert!((reading.humidity - 50.0).abs() < 0.01);
     }
 
-    #[test]
-    fn pms_checksum_is_enforced() {
+    /// A valid frame whose atmospheric PM2.5 is `pm2_5` and PM10 is 18.
+    fn pms_frame(pm2_5: u16) -> [u8; 32] {
         let mut frame = [0u8; 32];
         frame[0] = 0x42;
         frame[1] = 0x4d;
         frame[2] = 0;
         frame[3] = 28;
-        frame[12] = 0;
-        frame[13] = 12;
+        frame[12..14].copy_from_slice(&pm2_5.to_be_bytes());
         frame[14] = 0;
         frame[15] = 18;
         let checksum = frame[..30]
@@ -240,8 +282,56 @@ mod tests {
             .sum::<u16>()
             .to_be_bytes();
         frame[30..32].copy_from_slice(&checksum);
+        frame
+    }
+
+    #[test]
+    fn pms_checksum_is_enforced() {
+        let mut frame = pms_frame(12);
         assert_eq!(parse_pms5003_frame(&frame).unwrap().pm2_5, 12);
         frame[5] = 1;
         assert_eq!(parse_pms5003_frame(&frame), Err(SensorError::Checksum));
+    }
+
+    #[test]
+    fn framer_waits_for_a_whole_frame() {
+        let frame = pms_frame(12);
+        let mut framer = Pms5003Framer::default();
+        framer.push(&frame[..20]);
+        assert_eq!(framer.next_frame(), None);
+        framer.push(&frame[20..]);
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 12);
+        assert_eq!(framer.next_frame(), None);
+    }
+
+    #[test]
+    fn framer_skips_noise_before_a_header() {
+        let mut framer = Pms5003Framer::default();
+        framer.push(&[0x00, 0x4d, 0x42, 0x13, 0x42]);
+        assert_eq!(framer.next_frame(), None);
+        framer.push(&pms_frame(7)[1..]);
+        // The trailing 0x42 above was the real header's first byte.
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 7);
+    }
+
+    #[test]
+    fn framer_returns_back_to_back_frames_in_order() {
+        let mut framer = Pms5003Framer::default();
+        framer.push(&pms_frame(1));
+        framer.push(&pms_frame(2));
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 1);
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 2);
+        assert_eq!(framer.next_frame(), None);
+    }
+
+    #[test]
+    fn framer_reports_a_bad_frame_and_recovers() {
+        let mut bad = pms_frame(5);
+        bad[31] ^= 0xff;
+        let mut framer = Pms5003Framer::default();
+        framer.push(&bad);
+        framer.push(&pms_frame(9));
+        assert_eq!(framer.next_frame(), Some(Err(SensorError::Checksum)));
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 9);
     }
 }
