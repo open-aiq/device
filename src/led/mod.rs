@@ -5,6 +5,9 @@
 //! phases, pairing and updates) visible without a serial cable or a working
 //! screen. This module is pure logic: `esp.rs` redraws it in the background.
 
+#[cfg(target_os = "espidf")]
+pub mod esp;
+
 /// Brightest any channel ever gets, about 10%. A WS2812 at full power is
 /// glaring next to a bed.
 pub const MAX_LEVEL: u8 = 26;
