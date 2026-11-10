@@ -40,6 +40,13 @@ if env | grep -q '^MOCK_'; then
 	die "MOCK_* variables are set; unset them so no credentials are built into the release"
 fi
 
+# These are compiled in too. A release must keep its settings and talk to the
+# default backend.
+[ -z "${WIPE_CONFIG_ON_BOOT:-}" ] ||
+	die "WIPE_CONFIG_ON_BOOT is set; unset it so the release doesn't erase settings on every boot"
+[ -z "${BACKEND_BASE_URL:-}" ] ||
+	die "BACKEND_BASE_URL is set; unset it so the release uses the default backend"
+
 # --- Determine the next version ----------------------------------------------
 
 git fetch --tags --quiet
