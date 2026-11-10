@@ -877,7 +877,8 @@ where
         },
         Command::ProtocolError(FrameError::TooLong) => send("ERROR:COMMAND_TOO_LONG"),
         Command::ProtocolError(FrameError::Utf8) => send("ERROR:INVALID_UTF8"),
-        Command::Unknown(value) => send(&format!("echo: {value}")),
+        Command::Invalid(name) => send(&format!("ERROR:INVALID_{name}")),
+        Command::Unknown => send("ERROR:UNKNOWN_COMMAND"),
     }
     BleOutcome::Nothing
 }

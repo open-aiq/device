@@ -33,7 +33,26 @@ pub enum Command {
     SetDeviceId(String),
     SetDeviceKey(String),
     ProtocolError(FrameError),
-    Unknown(String),
+    /// A setter whose value can't be used; the name goes in the `ERROR:` reply.
+    Invalid(&'static str),
+    /// Not a command. The text isn't kept, so a mistyped secret is never
+    /// logged or sent back.
+    Unknown,
+}
+
+/// Splits `NAME:value` on a known setter name, in any letter case.
+fn setter<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let head = line.get(..name.len())?;
+    head.eq_ignore_ascii_case(name).then(|| &line[name.len()..])
+}
+
+/// A latitude or longitude: a finite number within `limit` degrees.
+fn coordinate(value: &str, limit: f64) -> Option<f64> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|degrees| degrees.is_finite() && degrees.abs() <= limit)
 }
 
 pub fn parse_command(value: &str) -> Command {
@@ -59,20 +78,20 @@ pub fn parse_command(value: &str) -> Command {
         Command::Live(false)
     } else if value.eq_ignore_ascii_case("OTA:CHECK") {
         Command::OtaCheck
-    } else if let Some(value) = value.strip_prefix("SSID:") {
+    } else if let Some(value) = setter(value, "SSID:") {
         Command::SetSsid(value.to_owned())
-    } else if let Some(value) = value.strip_prefix("PASS:") {
+    } else if let Some(value) = setter(value, "PASS:") {
         Command::SetPassword(value.to_owned())
-    } else if let Some(value) = value.strip_prefix("LAT:") {
-        Command::SetLatitude(value.parse().unwrap_or(0.0))
-    } else if let Some(value) = value.strip_prefix("LON:") {
-        Command::SetLongitude(value.parse().unwrap_or(0.0))
-    } else if let Some(value) = value.strip_prefix("DEVID:") {
+    } else if let Some(value) = setter(value, "LAT:") {
+        coordinate(value, 90.0).map_or(Command::Invalid("LAT"), Command::SetLatitude)
+    } else if let Some(value) = setter(value, "LON:") {
+        coordinate(value, 180.0).map_or(Command::Invalid("LON"), Command::SetLongitude)
+    } else if let Some(value) = setter(value, "DEVID:") {
         Command::SetDeviceId(value.to_owned())
-    } else if let Some(value) = value.strip_prefix("DEVKEY:") {
+    } else if let Some(value) = setter(value, "DEVKEY:") {
         Command::SetDeviceKey(value.to_owned())
     } else {
-        Command::Unknown(value.to_owned())
+        Command::Unknown
     }
 }
 
@@ -289,6 +308,44 @@ mod tests {
         assert_eq!(parse_command("LIVE:OFF"), Command::Live(false));
         assert_eq!(parse_command("ota:check"), Command::OtaCheck);
         assert_eq!(parse_command("SSID:a:b"), Command::SetSsid("a:b".into()));
+    }
+
+    #[test]
+    fn setters_take_any_case_and_keep_the_value_as_typed() {
+        assert_eq!(parse_command("ssid:Home"), Command::SetSsid("Home".into()));
+        assert_eq!(
+            parse_command("Pass:S3cret"),
+            Command::SetPassword("S3cret".into())
+        );
+        assert_eq!(
+            parse_command("devid:dev_1"),
+            Command::SetDeviceId("dev_1".into())
+        );
+        assert_eq!(
+            parse_command("DevKey:sk_A"),
+            Command::SetDeviceKey("sk_A".into())
+        );
+        assert_eq!(parse_command("PASS:"), Command::SetPassword(String::new()));
+        // Not a setter, and not split in the middle of a character.
+        assert_eq!(parse_command("pässword"), Command::Unknown);
+        assert_eq!(parse_command("PASS"), Command::Unknown);
+    }
+
+    #[test]
+    fn coordinates_must_be_real_places() {
+        assert_eq!(parse_command("LAT:24.8607"), Command::SetLatitude(24.8607));
+        assert_eq!(
+            parse_command("lon: -67.0011 "),
+            Command::SetLongitude(-67.0011)
+        );
+        assert_eq!(parse_command("LAT:-90"), Command::SetLatitude(-90.0));
+        assert_eq!(parse_command("LON:180"), Command::SetLongitude(180.0));
+        for bad in ["LAT:abc", "LAT:", "LAT:90.1", "LAT:nan", "LAT:inf"] {
+            assert_eq!(parse_command(bad), Command::Invalid("LAT"), "{bad}");
+        }
+        for bad in ["LON:abc", "LON:-180.5", "LON:NaN"] {
+            assert_eq!(parse_command(bad), Command::Invalid("LON"), "{bad}");
+        }
     }
 
     #[test]
