@@ -29,7 +29,7 @@ use device_rust::{
         esp::EspTelemetrySink, live_reading_json, Aggregator, TelemetrySink, UploadResult,
     },
     wifi::{esp::EspWifiPort, WifiPort},
-    FIRMWARE_VERSION, SENSOR_INTERVAL_MS, UPLOAD_INTERVAL_MS,
+    CLIMATE_INTERVAL_MS, FIRMWARE_VERSION, UPLOAD_INTERVAL_MS,
 };
 
 type Display = Option<OledDisplay<SharedI2c>>;
@@ -140,7 +140,7 @@ fn main() -> anyhow::Result<()> {
         live: false,
         ota_progress: None,
     };
-    let mut last_sample_ms = 0;
+    let mut last_climate_ms = 0;
     let mut last_upload_tick_ms = 0;
     let mut last_render_ms = 0;
     let mut boot_logs_sent = false;
@@ -238,8 +238,8 @@ fn main() -> anyhow::Result<()> {
             dirty = true;
         }
 
-        if now_ms.saturating_sub(last_sample_ms) >= SENSOR_INTERVAL_MS {
-            last_sample_ms = now_ms;
+        if now_ms.saturating_sub(last_climate_ms) >= CLIMATE_INTERVAL_MS {
+            last_climate_ms = now_ms;
             let pm = match pms5003.read() {
                 Ok(value) => Some(value),
                 Err(error) => {

@@ -13,7 +13,8 @@ pub mod storage;
 pub mod telemetry;
 pub mod wifi;
 
-pub const SENSOR_INTERVAL_MS: u64 = 20_000;
+/// How often the SHT30 is read and the screen and BLE live view get a fresh sample.
+pub const CLIMATE_INTERVAL_MS: u64 = 20_000;
 pub const UPLOAD_INTERVAL_MS: u64 = 10 * 60_000;
 /// Firmware version reported over BLE (`FW:`) and HTTP (`X-Firmware-Version`).
 pub const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
