@@ -20,7 +20,7 @@ and active-low buttons with internal pull-ups.
 | OLED + SHT30 | SCL | 4 |
 | PMS5003 | sensor TX -> ESP RX | 17 |
 | PMS5003 | sensor RX <- ESP TX | 18 |
-| PMS5003 | SET (pulled up on the board, not driven yet) | 8 |
+| PMS5003 | SET: high runs, low sleeps | 8 |
 | PMS5003 | RESET (pulled up on the board, not driven yet) | 16 |
 | Button | Right, active-low | 15 |
 | Button | Left, active-low | 6 |
@@ -35,6 +35,29 @@ The PMS5003 normally uses 5 V power; verify the module's UART logic levels.
 At boot the firmware accepts an SHT30 at `0x44`/`0x45` and OLED at
 `0x3C`/`0x3D`. Missing or ambiguous devices are logged without stopping other
 services. Controller type cannot be inferred from its address.
+
+## Sampling
+
+We let the PMS5003 rest between short bursts, because its fan and laser wear
+out with run time. The timing lives in
+[`src/sensors/schedule.rs`](src/sensors/schedule.rs):
+
+| Constant | Value | What it does |
+| --- | --- | --- |
+| `PMS_CYCLE_MS` | 5 min | One wake, warm-up, sample and sleep cycle; two per upload |
+| `PMS_WARM_UP_MS` | 30 s | Frames are ignored while the fan settles (datasheet minimum) |
+| `PMS_SAMPLE_MS` | 30 s | Every frame in this window is averaged, about 13 per burst |
+| `CLIMATE_INTERVAL_MS` | 20 s | SHT30 reading and screen/BLE live refresh (`src/lib.rs`) |
+| `UPLOAD_INTERVAL_MS` | 10 min | One averaged upload (`src/lib.rs`) |
+
+So the fan and laser run 60 s in every 5 minutes. Uploads only go out while
+the sensor rests, so a burst is never split. While it rests, the screen keeps
+the last burst's PM. If a burst brings no frames, PM shows as missing and a
+`sensor` log event is recorded.
+
+The manufacturer's manual is in [`docs/datasheets/`](docs/datasheets/), and
+[The particle sensor](https://docs.air-iq.net/device/particle-sensor/) on the
+docs site explains why we chose this timing, with sources.
 
 ## Build and quality gates
 
@@ -136,7 +159,7 @@ lines are limited to 512 bytes. Secrets are never echoed.
 | `DEVID:<dev_...>` / `DEVKEY:<sk_...>` | `OK: DEVID set to <id>` / `OK: device key set` |
 | `SAVE` | `SAVE_BEGIN`, `WIFI_CONNECTING`, then `SAVE_OK` + `IP:<ip>`, or `SAVE_FAILED:WIFI` / `SAVE_FAILED:STORAGE`, then `SAVE_END` |
 | `LOAD` | `LOAD_BEGIN`, `SSID:`, `PASS_SET:0/1`, `LAT:`, `LON:`, `DEVID:`, `DEVKEY_SET:0/1`, `LOAD_END` |
-| `READ` | `READING:{json}` with the latest 20 s sample, or `ERROR:NO_READING` |
+| `READ` | `READING:{json}` with the latest 20 s sample (PM from the latest burst), or `ERROR:NO_READING` |
 | `LIVE:ON` / `LIVE:OFF` | `OK: live on/off`; while on, `READING:{json}` after every sample until disconnect |
 | `OTA:CHECK` | `OK: ota check`; the device checks for an approved update right away (`OTA:NONE`, `OTA:STARTING <ver>`, `OTA:FAILED`) |
 | `CLEAR` | `CLEARED all stored config` (also removes BLE bonds) |
@@ -155,7 +178,7 @@ All device requests send `X-Device-ID`, `X-Device-Key` and
 
 | Request | When |
 | --- | --- |
-| `POST /data` | Every 10 minutes with the averaged reading (first upload after the first complete sample) |
+| `POST /data` | Every 10 minutes with the averaged reading (first upload after the first burst, about a minute after boot) |
 | `POST /device/logs` | After each successful upload and once WiFi is up after boot |
 | `GET /device/ota` | After each successful upload, or on `OTA:CHECK` |
 | `POST /device/ota/status` | During an update: `downloading` (every 10 %), `installing`, `succeeded`, `failed` |
@@ -210,7 +233,9 @@ bundle.
 For each OLED controller build:
 
 1. Confirm the expected OLED and SHT30 addresses in the boot log.
-2. Confirm PMS5003, temperature, and humidity samples every 20 seconds.
+2. Confirm temperature and humidity samples every 20 seconds, and that the
+   PMS5003 logs `awake, warming up` every 5 minutes, then `asleep after N
+   frames` 60 seconds later (N is about 13) with the fan audibly stopping.
 3. Confirm buttons (or `BTN:LEFT` / `BTN:RIGHT`) cycle AQI, climate, and
    status screens without bounce.
 4. Confirm BLE is not advertising until `BTN:PAIR` / both-button hold. Confirm
