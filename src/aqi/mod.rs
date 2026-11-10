@@ -7,7 +7,7 @@ pub use bands::{Band, BANDS};
 pub enum AqiCategory {
     Good,
     Moderate,
-    UnhealthySensitive,
+    SlightlyUnhealthy,
     Unhealthy,
     VeryUnhealthy,
     Hazardous,
@@ -17,7 +17,7 @@ impl AqiCategory {
     pub const ALL: [Self; 6] = [
         Self::Good,
         Self::Moderate,
-        Self::UnhealthySensitive,
+        Self::SlightlyUnhealthy,
         Self::Unhealthy,
         Self::VeryUnhealthy,
         Self::Hazardous,
@@ -81,7 +81,7 @@ const PM25: [Breakpoint; 6] = [
         high: 55.4,
         i_low: 101,
         i_high: 150,
-        category: AqiCategory::UnhealthySensitive,
+        category: AqiCategory::SlightlyUnhealthy,
     },
     Breakpoint {
         low: 55.5,
@@ -126,7 +126,7 @@ const PM10: [Breakpoint; 6] = [
         high: 254.0,
         i_low: 101,
         i_high: 150,
-        category: AqiCategory::UnhealthySensitive,
+        category: AqiCategory::SlightlyUnhealthy,
     },
     Breakpoint {
         low: 255.0,
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(compute_us_aqi(9, 0).aqi, 50);
         assert_eq!(
             compute_us_aqi(36, 0).category,
-            AqiCategory::UnhealthySensitive
+            AqiCategory::SlightlyUnhealthy
         );
         assert_eq!(compute_us_aqi(400, 900).aqi, 500);
     }
@@ -208,10 +208,7 @@ mod tests {
                 assert_eq!(band.max.unwrap_or(500), bp.i_high);
             }
         }
-        assert_eq!(
-            AqiCategory::UnhealthySensitive.label(),
-            "Slightly Unhealthy"
-        );
+        assert_eq!(AqiCategory::SlightlyUnhealthy.label(), "Slightly Unhealthy");
         assert_eq!(AqiCategory::ALL.len(), BANDS.len());
     }
 
