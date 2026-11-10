@@ -107,15 +107,29 @@ impl<B: I2cBus> OledDisplay<B> {
     }
 
     pub fn init(&self) -> Result<(), SensorError> {
+        #[rustfmt::skip]
         let common = [
-            0xae, 0xd5, 0x80, 0xa8, 0x3f, 0xd3, 0x00, 0x40, 0xa1, 0xc8, 0xda, 0x12, 0x81, 0x7f,
-            0xd9, 0xf1, 0xdb, 0x40, 0xa4, 0xa6,
+            0xae,       // display off while it's set up
+            0xd5, 0x80, // clock divide and oscillator: the default
+            0xa8, 0x3f, // multiplex ratio: 64 rows
+            0xd3, 0x00, // no vertical offset
+            0x40,       // start at row 0
+            0xa1, 0xc8, // flip columns and rows, so the header is at the bottom
+            0xda, 0x12, // COM pin layout for a 128x64 panel
+            0x81, 0x7f, // contrast: half
+            0xd9, 0xf1, // pre-charge period
+            0xdb, 0x40, // VCOMH deselect level
+            0xa4,       // show the frame buffer, not all pixels on
+            0xa6,       // normal, not inverted
         ];
         self.command(&common)?;
         match self.controller {
+            // DC-DC converter on.
             OledController::Sh1106 => self.command(&[0xad, 0x8b])?,
+            // Charge pump on, then horizontal addressing.
             OledController::Ssd1306 => self.command(&[0x8d, 0x14, 0x20, 0x00])?,
         }
+        // Display on.
         self.command(&[0xaf])
     }
 
@@ -127,12 +141,18 @@ impl<B: I2cBus> OledDisplay<B> {
     }
 
     pub fn flush(&self) -> Result<(), SensorError> {
-        for page in 0..8u8 {
+        const PAGE_LEN: usize = WIDTH as usize;
+        for page in 0..(HEIGHT / 8) as u8 {
             match self.controller {
+                // Page, then column 2: the SH1106's RAM is 132 wide and the
+                // panel sits in the middle of it.
                 OledController::Sh1106 => self.command(&[0xb0 + page, 0x02, 0x10])?,
-                OledController::Ssd1306 => self.command(&[0x21, 0, 127, 0x22, page, page])?,
+                // Column range, then this one page.
+                OledController::Ssd1306 => {
+                    self.command(&[0x21, 0, WIDTH as u8 - 1, 0x22, page, page])?
+                }
             }
-            let row = &self.buffer[usize::from(page) * 128..usize::from(page + 1) * 128];
+            let row = &self.buffer[usize::from(page) * PAGE_LEN..usize::from(page + 1) * PAGE_LEN];
             for chunk in row.chunks(16) {
                 let mut packet = [0u8; 17];
                 packet[0] = 0x40;
