@@ -32,7 +32,7 @@ use device_rust::{
     telemetry::{
         esp::EspTelemetrySink, live_reading_json, Aggregator, TelemetrySink, UploadResult,
     },
-    wifi::{esp::EspWifiPort, WifiPort},
+    wifi::{esp::EspWifiPort, WifiPort, WifiStatus},
     CLIMATE_INTERVAL_MS, FIRMWARE_VERSION, UPLOAD_INTERVAL_MS,
 };
 
@@ -113,6 +113,24 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
+
+    // Something to look at while WiFi connects, which can take a few seconds.
+    if let Some(oled) = &mut display {
+        let starting = ScreenModel {
+            screen: Screen::Aqi,
+            readings: None,
+            wifi: &WifiStatus::default(),
+            ssid: "",
+            version: FIRMWARE_VERSION,
+            last_upload: None,
+            now_ms: 0,
+            overlay: Some(Overlay::Starting),
+            provisioned: false,
+        };
+        if let Err(error) = oled.show(&starting) {
+            log::error!("OLED update failed: {error:?}");
+        }
+    }
 
     // Faults found at boot show on the LED while WiFi connects.
     let mut sht30_failed = sht30.is_none();
@@ -663,6 +681,8 @@ fn render(
         screen: state.screen,
         readings: state.latest.as_ref(),
         wifi: &status,
+        ssid: &config.ssid,
+        version: FIRMWARE_VERSION,
         last_upload: state.last_upload,
         now_ms,
         overlay,
