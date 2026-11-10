@@ -257,8 +257,13 @@ fn main() -> anyhow::Result<()> {
                 },
                 None => None,
             };
+            if let Some(pm) = &pm {
+                aggregator.add_pm(pm);
+            }
+            if let Some(climate) = &climate {
+                aggregator.add_climate(climate);
+            }
             let current = readings(pm, climate);
-            aggregator.add(&current);
             if state.live && state.pairing.is_connected() {
                 send(
                     &mut ble,
