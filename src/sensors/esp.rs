@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use esp_idf_svc::{
     hal::{
         delay::{BLOCK, NON_BLOCK},
+        gpio::{Output, PinDriver},
         i2c::I2cDriver,
         uart::UartDriver,
     },
@@ -33,15 +34,40 @@ impl I2cBus for SharedI2c {
 
 pub struct Pms5003 {
     uart: UartDriver<'static>,
+    /// SET pin: high (or floating) runs the fan and laser, low puts them to
+    /// sleep (`docs/datasheets/`, page 4).
+    set: PinDriver<'static, Output>,
     framer: Pms5003Framer,
 }
 
 impl Pms5003 {
-    pub fn new(uart: UartDriver<'static>) -> Self {
-        Self {
+    /// Takes the sensor's UART and SET pin and leaves the sensor running.
+    pub fn new(
+        uart: UartDriver<'static>,
+        set: PinDriver<'static, Output>,
+    ) -> Result<Self, SensorError> {
+        let mut sensor = Self {
             uart,
+            set,
             framer: Pms5003Framer::default(),
-        }
+        };
+        sensor.set.set_high().map_err(|_| SensorError::Bus)?;
+        Ok(sensor)
+    }
+
+    /// Stops the fan and laser.
+    pub fn sleep(&mut self) -> Result<(), SensorError> {
+        self.set.set_low().map_err(|_| SensorError::Bus)
+    }
+
+    /// Starts the fan and laser and forgets any bytes received before, so a
+    /// frame from before the sleep is never averaged. Readings need 30 s to
+    /// settle after this (`docs/datasheets/`, page 10).
+    pub fn wake(&mut self) -> Result<(), SensorError> {
+        self.set.set_high().map_err(|_| SensorError::Bus)?;
+        self.uart.clear_rx().map_err(|_| SensorError::Bus)?;
+        self.framer = Pms5003Framer::default();
+        Ok(())
     }
 
     /// Returns the next frame if a whole one has arrived, without waiting.

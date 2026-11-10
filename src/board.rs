@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use esp_idf_svc::hal::{
-    gpio::{self, Pins},
+    gpio::{self, PinDriver, Pins},
     i2c::{I2cConfig, I2cDriver, I2C0},
     uart::{config::Config as UartConfig, UartDriver, UART1},
     units::{Hertz, KiloHertz},
@@ -37,9 +37,14 @@ impl Board {
             &uart_config,
         )?;
 
+        // PMS5003 SET: driven high to run, low to sleep. RESET (GPIO 16) is left alone.
+        let pms_set = PinDriver::output(pins.gpio8)?;
+        let pms5003 = Pms5003::new(uart, pms_set)
+            .map_err(|error| anyhow::anyhow!("PMS5003 SET pin: {error:?}"))?;
+
         Ok(Self {
             shared_i2c,
-            pms5003: Pms5003::new(uart),
+            pms5003,
             // Right, left. The pair button on GPIO 7 isn't read yet.
             buttons: EspButtons::new(pins.gpio15, pins.gpio6)?,
         })
