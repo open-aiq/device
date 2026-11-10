@@ -1,9 +1,10 @@
-# AirMonitor Rust firmware
+# Open AIQ firmware
 
-This is the AirMonitor firmware on `main`. It replaces the earlier Arduino
-firmware for the ESP32 DOIT DevKit v1, which remains available in git history.
+Rust/ESP-IDF firmware for the ESP32-S3 Open AIQ monitor. It replaces the
+earlier Arduino firmware for the ESP32 DOIT DevKit v1, which remains available
+in git history. Over Bluetooth the monitor still goes by `AirMonitor-XXXX`.
 
-Rust/ESP-IDF firmware for the ESP32-S3 AirMonitor. It reads a PMS5003 and SHT30,
+It reads a PMS5003 and SHT30,
 renders three screens on a 128x64 I2C OLED, provisions over a passkey-secured
 Nordic UART BLE service, persists configuration in NVS, uploads ten-minute
 averages and important log events, and installs owner-approved OTA updates.
@@ -71,7 +72,7 @@ The buttons cycle three screens. Left goes back, right goes forward.
 | --- | --- |
 | AQI | The AQI as a large number, its band by name and on a six-step gauge, the feels-like temperature, and a WiFi icon (struck through when offline) |
 | Readings | PM1.0, PM2.5 and PM10 in µg/m³, then temperature and humidity |
-| Network | The WiFi name with signal bars, the IP address (or `Offline`), the last upload in words such as `Sent 2m ago`, and the firmware version |
+| Network | The WiFi name with signal bars, the IP address (or `Offline`), the last upload in words such as `Sent 2m ago` (or `Not set up yet`), and the firmware version |
 
 The OLED has one colour, so the band shows as a name and a gauge: one box per
 band, Good on the left, with the current one filled. The colour itself is on
