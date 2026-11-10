@@ -549,7 +549,7 @@ fn run_ota_cycle(
         }
         OtaDecision::ReportRolledBack(job) => {
             log::error!(target: "event::ota", "update to {} rolled back", job.version);
-            let error = format!("rolled back to {FIRMWARE_VERSION}");
+            let error = ota::report_error(&format!("rolled back to {FIRMWARE_VERSION}"));
             ota::esp::report(
                 config,
                 &report(&job.job_id, JobStatus::Failed, None, Some(error)),
@@ -594,7 +594,7 @@ fn run_ota_cycle(
                     state.ota_progress = None;
                     led.update(|status| status.ota = false);
                     log::error!(target: "event::ota", "update to {} failed: {error:#}", job.version);
-                    let message = format!("{error:#}");
+                    let message = ota::report_error(&format!("{error:#}"));
                     ota::esp::report(
                         config,
                         &report(&job.job_id, JobStatus::Failed, None, Some(message)),

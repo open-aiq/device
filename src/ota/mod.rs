@@ -78,6 +78,15 @@ pub struct StatusReport<'a> {
     pub version: &'a str,
 }
 
+/// The backend rejects a status report whose `error` is longer than this.
+pub const ERROR_MAX_CHARS: usize = 500;
+
+/// Cuts an error message to what the backend accepts, so a long one still
+/// gets reported.
+pub fn report_error(message: &str) -> String {
+    message.chars().take(ERROR_MAX_CHARS).collect()
+}
+
 impl StatusReport<'_> {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
@@ -175,6 +184,13 @@ mod tests {
             size: 3,
             status,
         }
+    }
+
+    #[test]
+    fn long_errors_are_cut_to_what_the_backend_accepts() {
+        assert_eq!(report_error("short"), "short");
+        let long = "é".repeat(ERROR_MAX_CHARS + 20);
+        assert_eq!(report_error(&long).chars().count(), ERROR_MAX_CHARS);
     }
 
     #[test]
