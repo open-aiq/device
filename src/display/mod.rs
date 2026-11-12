@@ -123,7 +123,10 @@ impl<B: I2cBus> OledDisplay<B> {
             0xa8, 0x3f, // multiplex ratio: 64 rows
             0xd3, 0x00, // no vertical offset
             0x40,       // start at row 0
-            0xa1, 0xc8, // flip columns and rows, so the header is at the bottom
+            // Reverse columns and rows: the usual setting for these modules,
+            // upright with the pin header along the top edge, as Proto2
+            // holds it. If yours shows upside down, use 0xa0, 0xc0.
+            0xa1, 0xc8,
             0xda, 0x12, // COM pin layout for a 128x64 panel
             0x81, 0x7f, // contrast: half
             0xd9, 0xf1, // pre-charge period
