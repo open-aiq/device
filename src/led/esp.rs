@@ -55,28 +55,36 @@ impl LedHandle {
     }
 }
 
-/// Starts the LED thread. If the LED can't start, the handle still works and
-/// the firmware carries on without it.
-pub fn start(pin: impl OutputPin + 'static) -> LedHandle {
+/// Starts the LED thread. The same frames go out on both pins, because
+/// DevKitC-1 boards put the LED on one or the other; nothing else uses them.
+/// If the LED can't start, the handle still works and the firmware carries on
+/// without it.
+pub fn start(pin: impl OutputPin + 'static, alt_pin: impl OutputPin + 'static) -> LedHandle {
     let handle = LedHandle {
         status: Arc::new(Mutex::new(LedStatus::default())),
         epoch: Instant::now(),
     };
-    match spawn(pin, handle.clone()) {
+    match spawn(pin, alt_pin, handle.clone()) {
         Ok(()) => log::info!("Status LED started"),
         Err(error) => log::error!("Status LED unavailable: {error:#}"),
     }
     handle
 }
 
-fn spawn(pin: impl OutputPin + 'static, handle: LedHandle) -> anyhow::Result<()> {
-    let mut channel = TxChannelDriver::new(
-        pin,
-        &TxChannelConfig {
-            resolution: RESOLUTION,
-            ..Default::default()
-        },
-    )?;
+fn spawn(
+    pin: impl OutputPin + 'static,
+    alt_pin: impl OutputPin + 'static,
+    handle: LedHandle,
+) -> anyhow::Result<()> {
+    let config = TxChannelConfig {
+        resolution: RESOLUTION,
+        ..Default::default()
+    };
+    let mut channels = vec![TxChannelDriver::new(pin, &config)?];
+    match TxChannelDriver::new(alt_pin, &config) {
+        Ok(channel) => channels.push(channel),
+        Err(error) => log::warn!("Second status LED pin unavailable: {error:?}"),
+    }
     let bits = Bits::new()?;
     std::thread::Builder::new()
         .name("status-led".into())
@@ -96,9 +104,14 @@ fn spawn(pin: impl OutputPin + 'static, handle: LedHandle) -> anyhow::Result<()>
                 let rgb = colour(&status, handle.now_ms());
                 if shown != Some(rgb) {
                     let frame = bits.frame(rgb);
-                    match channel.send_and_wait(&mut encoder, &frame, &Default::default()) {
-                        Ok(()) => shown = Some(rgb),
-                        Err(error) => log::warn!("Status LED write failed: {error:?}"),
+                    shown = Some(rgb);
+                    for channel in &mut channels {
+                        if let Err(error) =
+                            channel.send_and_wait(&mut encoder, &frame, &Default::default())
+                        {
+                            log::warn!("Status LED write failed: {error:?}");
+                            shown = None;
+                        }
                     }
                 }
                 FreeRtos::delay_ms(FRAME_MS);
