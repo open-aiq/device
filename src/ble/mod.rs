@@ -1,3 +1,7 @@
+pub mod wire;
+
+pub use wire::{command, reply, ErrorCode};
+
 pub const NUS_SERVICE_UUID: &str = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 pub const NUS_RX_UUID: &str = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
 pub const NUS_TX_UUID: &str = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -33,17 +37,19 @@ pub enum Command {
     SetDeviceId(String),
     SetDeviceKey(String),
     ProtocolError(FrameError),
-    /// A setter whose value can't be used; the name goes in the `ERROR:` reply.
-    Invalid(&'static str),
+    /// A setter whose value can't be used.
+    Invalid(ErrorCode),
     /// Not a command. The text isn't kept, so a mistyped secret is never
     /// logged or sent back.
     Unknown,
 }
 
-/// Splits `NAME:value` on a known setter name, in any letter case.
-fn setter<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let head = line.get(..name.len())?;
-    head.eq_ignore_ascii_case(name).then(|| &line[name.len()..])
+/// Splits `KEY:value` on a known setter key, in any letter case.
+fn setter<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let head = line.get(..key.len())?;
+    let rest = &line[key.len()..];
+    (head.eq_ignore_ascii_case(key) && rest.starts_with(wire::SEPARATOR))
+        .then(|| &rest[wire::SEPARATOR.len_utf8()..])
 }
 
 /// A latitude or longitude: a finite number within `limit` degrees.
@@ -56,39 +62,45 @@ fn coordinate(value: &str, limit: f64) -> Option<f64> {
 }
 
 pub fn parse_command(value: &str) -> Command {
-    if value.eq_ignore_ascii_case("PING") {
+    if value.eq_ignore_ascii_case(command::PING) {
         Command::Ping
-    } else if value.eq_ignore_ascii_case("STATUS") {
+    } else if value.eq_ignore_ascii_case(command::STATUS) {
         Command::Status
-    } else if value.eq_ignore_ascii_case("SAVE") {
+    } else if value.eq_ignore_ascii_case(command::SAVE) {
         Command::Save
-    } else if value.eq_ignore_ascii_case("LOAD") {
+    } else if value.eq_ignore_ascii_case(command::LOAD) {
         Command::Load
-    } else if value.eq_ignore_ascii_case("CLEAR") {
+    } else if value.eq_ignore_ascii_case(command::CLEAR) {
         Command::Clear
-    } else if value.eq_ignore_ascii_case("INFO") {
+    } else if value.eq_ignore_ascii_case(command::INFO) {
         Command::Info
-    } else if value.eq_ignore_ascii_case("SCAN") {
+    } else if value.eq_ignore_ascii_case(command::SCAN) {
         Command::Scan
-    } else if value.eq_ignore_ascii_case("READ") {
+    } else if value.eq_ignore_ascii_case(command::READ) {
         Command::Read
-    } else if value.eq_ignore_ascii_case("LIVE:ON") {
+    } else if value.eq_ignore_ascii_case(command::LIVE_ON) {
         Command::Live(true)
-    } else if value.eq_ignore_ascii_case("LIVE:OFF") {
+    } else if value.eq_ignore_ascii_case(command::LIVE_OFF) {
         Command::Live(false)
-    } else if value.eq_ignore_ascii_case("OTA:CHECK") {
+    } else if value.eq_ignore_ascii_case(command::OTA_CHECK) {
         Command::OtaCheck
-    } else if let Some(value) = setter(value, "SSID:") {
+    } else if let Some(value) = setter(value, command::SSID) {
         Command::SetSsid(value.to_owned())
-    } else if let Some(value) = setter(value, "PASS:") {
+    } else if let Some(value) = setter(value, command::PASS) {
         Command::SetPassword(value.to_owned())
-    } else if let Some(value) = setter(value, "LAT:") {
-        coordinate(value, 90.0).map_or(Command::Invalid("LAT"), Command::SetLatitude)
-    } else if let Some(value) = setter(value, "LON:") {
-        coordinate(value, 180.0).map_or(Command::Invalid("LON"), Command::SetLongitude)
-    } else if let Some(value) = setter(value, "DEVID:") {
+    } else if let Some(value) = setter(value, command::LAT) {
+        coordinate(value, 90.0).map_or(
+            Command::Invalid(ErrorCode::InvalidLat),
+            Command::SetLatitude,
+        )
+    } else if let Some(value) = setter(value, command::LON) {
+        coordinate(value, 180.0).map_or(
+            Command::Invalid(ErrorCode::InvalidLon),
+            Command::SetLongitude,
+        )
+    } else if let Some(value) = setter(value, command::DEVID) {
         Command::SetDeviceId(value.to_owned())
-    } else if let Some(value) = setter(value, "DEVKEY:") {
+    } else if let Some(value) = setter(value, command::DEVKEY) {
         Command::SetDeviceKey(value.to_owned())
     } else {
         Command::Unknown
@@ -345,10 +357,18 @@ mod tests {
         assert_eq!(parse_command("LAT:-90"), Command::SetLatitude(-90.0));
         assert_eq!(parse_command("LON:180"), Command::SetLongitude(180.0));
         for bad in ["LAT:abc", "LAT:", "LAT:90.1", "LAT:nan", "LAT:inf"] {
-            assert_eq!(parse_command(bad), Command::Invalid("LAT"), "{bad}");
+            assert_eq!(
+                parse_command(bad),
+                Command::Invalid(ErrorCode::InvalidLat),
+                "{bad}"
+            );
         }
         for bad in ["LON:abc", "LON:-180.5", "LON:NaN"] {
-            assert_eq!(parse_command(bad), Command::Invalid("LON"), "{bad}");
+            assert_eq!(
+                parse_command(bad),
+                Command::Invalid(ErrorCode::InvalidLon),
+                "{bad}"
+            );
         }
     }
 
