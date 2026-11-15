@@ -39,6 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: esp-rs/xtensa-toolchain@v1.6
+        # espup asks the GitHub API for the latest toolchain; without a token
+        # it shares the runner's anonymous rate limit and can fail.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           default: true
           buildtargets: esp32s3
