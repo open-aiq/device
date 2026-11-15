@@ -233,7 +233,8 @@ app requires this firmware.
 Commands are newline-terminated text. Replies are newline-terminated lines sent
 as notifications of up to `MTU - 3` bytes (MTU 247 is requested; 20-byte chunks
 at the default MTU). Clients must reassemble notifications until `\n`. Receive
-lines are limited to 512 bytes. Secrets are never echoed.
+lines are limited to 512 bytes. Secrets are never echoed: a line that isn't a
+command gets `ERROR:UNKNOWN_COMMAND`, and its text is dropped.
 
 | Command | Reply |
 | --- | --- |
@@ -242,13 +243,13 @@ lines are limited to 512 bytes. Secrets are never echoed.
 | `INFO` | `INFO_BEGIN`, `FW:<ver>`, `MAC:<hex>`, `DEVID:<id>`, `DEVKEY_SET:0/1`, `WIFI:connected/disconnected`, `SSID:<ssid>`, `IP:<ip>`, `LAST_UPLOAD:<http>,<secs ago>` or `LAST_UPLOAD:none`, `INFO_END` |
 | `SCAN` | `SCAN_BEGIN`, `NET:<rssi>,<open/secured>,<ssid>` (strongest first, at most 15; SSID may contain commas), `SCAN_END`; `ERROR:SCAN` on failure |
 | `SSID:<name>` / `PASS:<secret>` | `OK: SSID set to <name>` / `OK: password set` |
-| `LAT:<deg>` / `LON:<deg>` | `OK: LAT set to <6dp>` / `OK: LON set to <6dp>` |
+| `LAT:<deg>` / `LON:<deg>` | `OK: LAT set to <6dp>` / `OK: LON set to <6dp>`; `ERROR:INVALID_LAT` / `ERROR:INVALID_LON` if it isn't a coordinate |
 | `DEVID:<dev_...>` / `DEVKEY:<sk_...>` | `OK: DEVID set to <id>` / `OK: device key set` |
 | `SAVE` | `SAVE_BEGIN`, `WIFI_CONNECTING`, then `SAVE_OK` + `IP:<ip>`, or `SAVE_FAILED:WIFI` / `SAVE_FAILED:STORAGE`, then `SAVE_END` |
 | `LOAD` | `LOAD_BEGIN`, `SSID:`, `PASS_SET:0/1`, `LAT:`, `LON:`, `DEVID:`, `DEVKEY_SET:0/1`, `LOAD_END` |
 | `READ` | `READING:{json}` with the latest 20 s sample (PM from the latest burst), or `ERROR:NO_READING` |
 | `LIVE:ON` / `LIVE:OFF` | `OK: live on/off`; while on, `READING:{json}` after every sample until disconnect |
-| `OTA:CHECK` | `OK: ota check`; the device checks for an approved update right away (`OTA:NONE`, `OTA:STARTING <ver>`, `OTA:FAILED`) |
+| `OTA:CHECK` | `OK: ota check`, then one of: `OTA:NONE` (nothing to install, or a new image is still being verified), `OTA:STARTING <ver>`, or `OTA:FAILED` (WiFi is down, or the check or install failed) |
 | `CLEAR` | `CLEARED all stored config` (also removes BLE bonds) |
 
 `READING` JSON uses the upload payload's keys:
