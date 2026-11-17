@@ -3,7 +3,10 @@
 //! The WS2812 on GPIO 48 is a diagnostics light. It makes states you can't
 //! otherwise see (sensor faults, the PMS5003 warm-up, sample and rest
 //! phases, pairing and updates) visible without a serial cable or a working
-//! screen. This module is pure logic: `esp.rs` redraws it in the background.
+//! screen. Between samples, its heartbeat takes the colour of the AQI band.
+//! This module is pure logic: `esp.rs` redraws it in the background.
+
+use crate::aqi::AqiCategory;
 
 #[cfg(target_os = "espidf")]
 pub mod esp;
@@ -20,6 +23,8 @@ pub const PAIR_RESULT_MS: u64 = 1_500;
 pub const FRAME_TICK_MS: u64 = 120;
 /// How often the resting heartbeat blinks while the PMS5003 sleeps.
 pub const HEARTBEAT_MS: u64 = 5_000;
+/// How long each heartbeat stays lit.
+pub const HEARTBEAT_ON_MS: u64 = 80;
 /// One blink in a fault code: half on, half off.
 pub const BLINK_MS: u64 = 400;
 /// Gap between fault codes, so they can be counted.
@@ -148,6 +153,8 @@ pub struct LedStatus {
     /// When the last counted PMS5003 frame arrived.
     pub last_frame_ms: Option<u64>,
     pub faults: Faults,
+    /// The latest AQI band; it colours the resting heartbeat.
+    pub aqi: Option<AqiCategory>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,13 +241,25 @@ pub fn colour(status: &LedStatus, now_ms: u64) -> Rgb {
             GREEN.at(if ticking { 1_000 } else { 300 })
         }
         Pattern::Asleep => {
-            if now_ms % HEARTBEAT_MS < 80 {
-                GREEN.at(500)
+            if now_ms % HEARTBEAT_MS < HEARTBEAT_ON_MS {
+                // The band's colour once there's a reading; green until then.
+                status.aqi.map_or(GREEN, band_tint).at(500)
             } else {
                 Rgb::OFF
             }
         }
     }
+}
+
+/// An AQI band's colour for the LED. The shared band colours are pastels,
+/// which look almost white on a dim WS2812, so this drops most of the white
+/// they share and stretches what's left to full range. The hue stays the same.
+pub fn band_tint(category: AqiCategory) -> Rgb {
+    let (r, g, b) = category.colour();
+    let floor = r.min(g).min(b) as u32 * 9 / 10;
+    let peak = (r.max(g).max(b) as u32).saturating_sub(floor).max(1);
+    let stretch = |c: u8| ((c as u32 - floor) * 255 / peak) as u8;
+    Rgb::new(stretch(r), stretch(g), stretch(b))
 }
 
 /// A triangle wave between 10% and 100%, in permille.
@@ -382,6 +401,36 @@ mod tests {
         };
         assert_ne!(colour(&status, 2 * HEARTBEAT_MS), Rgb::OFF);
         assert_eq!(colour(&status, 2 * HEARTBEAT_MS + 1_000), Rgb::OFF);
+    }
+
+    #[test]
+    fn heartbeat_takes_the_aqi_band_colour() {
+        let mut status = LedStatus {
+            pms: PmsState::Asleep,
+            ..healthy()
+        };
+        let beat = 2 * HEARTBEAT_MS;
+        assert_eq!(colour(&status, beat), GREEN.at(500));
+        let mut seen = Vec::new();
+        for category in AqiCategory::ALL {
+            status.aqi = Some(category);
+            let c = colour(&status, beat);
+            assert_ne!(c, Rgb::OFF, "{category:?}");
+            assert!(c.r <= MAX_LEVEL && c.g <= MAX_LEVEL && c.b <= MAX_LEVEL);
+            assert!(!seen.contains(&c), "{category:?} looks like another band");
+            seen.push(c);
+            assert_eq!(colour(&status, beat + HEARTBEAT_ON_MS), Rgb::OFF);
+        }
+    }
+
+    #[test]
+    fn band_tints_keep_their_hue_and_lose_the_white() {
+        let good = band_tint(AqiCategory::Good);
+        assert!(good.g == 255 && good.g > good.r && good.r > good.b);
+        let unhealthy = band_tint(AqiCategory::Unhealthy);
+        assert!(unhealthy.r == 255 && unhealthy.g < 40 && unhealthy.b < 40);
+        let very = band_tint(AqiCategory::VeryUnhealthy);
+        assert!(very.b == 255 && very.r > very.g, "purple");
     }
 
     #[test]

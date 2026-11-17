@@ -19,7 +19,7 @@ FLASH_ARGS   = --partition-table $(PARTITIONS) $(if $(BOOTLOADER),--bootloader $
 PORT ?=
 PORT_ARG := $(if $(PORT),--port $(PORT))
 
-.PHONY: help format\:fix format\:check test lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 image board\:info monitor release
+.PHONY: help format\:fix format\:check test screens lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 image board\:info monitor release
 
 ## help: Show available commands
 help:
@@ -38,6 +38,10 @@ format\:check:
 ## test: Run host library tests — make test [HOST_TARGET=x86_64-unknown-linux-gnu]
 test:
 	$(CARGO) test --lib --target $(HOST_TARGET)
+
+## screens: Print every OLED screen as ASCII art, to check a layout without hardware
+screens:
+	$(CARGO) test --lib --target $(HOST_TARGET) -- --ignored --nocapture print_screens
 
 ## lint:check: Run Clippy on the host library and both OLED firmware builds
 lint\:check:

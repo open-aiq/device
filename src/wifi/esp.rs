@@ -79,7 +79,15 @@ impl WifiPort for EspWifiPort<'_> {
                     .map(|value| value.ip.to_string())
             })
             .flatten();
-        WifiStatus { connected, ip }
+        let rssi = connected
+            .then(|| self.wifi.wifi().driver().get_rssi().ok())
+            .flatten()
+            .map(|value| value.clamp(i8::MIN as i32, i8::MAX as i32) as i8);
+        WifiStatus {
+            connected,
+            ip,
+            rssi,
+        }
     }
 
     fn scan(&mut self) -> Result<Vec<WifiNetwork>, Self::Error> {
