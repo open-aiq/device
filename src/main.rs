@@ -9,8 +9,8 @@ use esp_idf_svc::{
 
 use device_rust::{
     ble::{
-        esp::NimbleTransport, BleEvent, BleTransport, Command, FrameError, PairingAction,
-        PairingWindow,
+        command, esp::NimbleTransport, reply, BleEvent, BleTransport, Command, ErrorCode,
+        FrameError, PairingAction, PairingWindow,
     },
     board::Board,
     buttons::{ButtonEvent, ButtonSource, CombinedButtons},
@@ -234,9 +234,9 @@ fn main() -> anyhow::Result<()> {
                             // image is being verified. Answer now if it
                             // can't run; the next good upload checks anyway.
                             if pending_verify {
-                                send(&mut ble, "OTA:NONE");
+                                send(&mut ble, reply::OTA_NONE);
                             } else if !wifi.status().connected {
-                                send(&mut ble, "OTA:FAILED");
+                                send(&mut ble, reply::OTA_FAILED);
                             } else {
                                 ota_check_requested = true;
                             }
@@ -362,7 +362,7 @@ fn main() -> anyhow::Result<()> {
             if state.live && state.pairing.is_connected() {
                 send(
                     &mut ble,
-                    &format!("READING:{}", live_reading_json(&current, now_ms)),
+                    &reply::field(reply::READING, live_reading_json(&current, now_ms)),
                 );
             }
             state.latest = Some(current);
@@ -542,7 +542,7 @@ fn run_ota_cycle(
         Err(error) => {
             log::warn!("OTA check failed: {error:#}");
             if state.pairing.is_connected() {
-                send(ble, "OTA:FAILED");
+                send(ble, reply::OTA_FAILED);
             }
             return;
         }
@@ -551,7 +551,7 @@ fn run_ota_cycle(
     match ota::decide(job, FIRMWARE_VERSION) {
         OtaDecision::Nothing => {
             if connected {
-                send(ble, "OTA:NONE");
+                send(ble, reply::OTA_NONE);
             }
         }
         OtaDecision::ReportSucceeded(job) => {
@@ -561,7 +561,7 @@ fn run_ota_cycle(
                 &report(&job.job_id, JobStatus::Succeeded, Some(100), None),
             );
             if connected {
-                send(ble, "OTA:NONE");
+                send(ble, reply::OTA_NONE);
             }
         }
         OtaDecision::ReportRolledBack(job) => {
@@ -572,13 +572,13 @@ fn run_ota_cycle(
                 &report(&job.job_id, JobStatus::Failed, None, Some(error)),
             );
             if connected {
-                send(ble, "OTA:NONE");
+                send(ble, reply::OTA_NONE);
             }
         }
         OtaDecision::Install(job) => {
             event!("ota", "installing {} ({} bytes)", job.version, job.size);
             if connected {
-                send(ble, &format!("OTA:STARTING {}", job.version));
+                send(ble, &reply::ota_starting(&job.version));
             }
             let accepted = ota::esp::report(
                 config,
@@ -587,7 +587,7 @@ fn run_ota_cycle(
             if accepted == Some(409) {
                 log::warn!(target: "event::ota", "update to {} was cancelled", job.version);
                 if connected {
-                    send(ble, "OTA:NONE");
+                    send(ble, reply::OTA_NONE);
                 }
                 return;
             }
@@ -624,7 +624,7 @@ fn run_ota_cycle(
                     );
                     devlog::esp::flush(config);
                     if connected {
-                        send(ble, "OTA:FAILED");
+                        send(ble, reply::OTA_FAILED);
                     }
                 }
             }
@@ -745,51 +745,38 @@ where
 {
     let mut send = |message: &str| send(ble, message);
     match command {
-        Command::Ping => send("PONG"),
+        Command::Ping => send(reply::PONG),
         Command::Status => {
             let status = wifi.status();
-            send(&format!(
-                "WiFi: {} IP: {}",
-                if status.connected {
-                    "connected"
-                } else {
-                    "disconnected"
-                },
-                status.ip.as_deref().unwrap_or("0.0.0.0")
-            ));
+            send(&reply::status(status.connected, status.ip.as_deref()));
         }
         Command::Info => {
             let status = wifi.status();
-            send("INFO_BEGIN");
-            send(&format!("FW:{FIRMWARE_VERSION}"));
-            send(&format!("MAC:{mac}"));
-            send(&format!("DEVID:{}", config.device_id));
-            send(&format!(
-                "DEVKEY_SET:{}",
-                u8::from(!config.device_key.is_empty())
+            send(reply::INFO_BEGIN);
+            send(&reply::field(reply::FW, FIRMWARE_VERSION));
+            send(&reply::field(reply::MAC, mac));
+            send(&reply::field(reply::DEVID, &config.device_id));
+            send(&reply::flag(
+                reply::DEVKEY_SET,
+                !config.device_key.is_empty(),
             ));
-            send(&format!(
-                "WIFI:{}",
-                if status.connected {
-                    "connected"
-                } else {
-                    "disconnected"
-                }
+            send(&reply::field(reply::WIFI, reply::wifi(status.connected)));
+            send(&reply::field(reply::SSID, &config.ssid));
+            send(&reply::field(
+                reply::IP,
+                status.ip.as_deref().unwrap_or(reply::NO_IP),
             ));
-            send(&format!("SSID:{}", config.ssid));
-            send(&format!("IP:{}", status.ip.as_deref().unwrap_or("0.0.0.0")));
             match state.last_upload {
-                Some((result, at)) => send(&format!(
-                    "LAST_UPLOAD:{},{}",
-                    result.http_code,
-                    now_ms.saturating_sub(at) / 1_000
+                Some((result, at)) => send(&reply::list(
+                    reply::LAST_UPLOAD,
+                    &[&result.http_code, &(now_ms.saturating_sub(at) / 1_000)],
                 )),
-                None => send("LAST_UPLOAD:none"),
+                None => send(&reply::field(reply::LAST_UPLOAD, reply::NONE)),
             }
-            send("INFO_END");
+            send(reply::INFO_END);
         }
         Command::Scan => {
-            send("SCAN_BEGIN");
+            send(reply::SCAN_BEGIN);
             match wifi.scan() {
                 Ok(networks) => {
                     for network in networks {
@@ -798,110 +785,112 @@ where
                 }
                 Err(error) => {
                     log::warn!("WiFi scan failed: {error:?}");
-                    send("ERROR:SCAN");
+                    send(&reply::error(ErrorCode::Scan));
                 }
             }
-            send("SCAN_END");
+            send(reply::SCAN_END);
         }
         Command::Read => match &state.latest {
-            Some(latest) => send(&format!("READING:{}", live_reading_json(latest, now_ms))),
-            None => send("ERROR:NO_READING"),
+            Some(latest) => send(&reply::field(
+                reply::READING,
+                live_reading_json(latest, now_ms),
+            )),
+            None => send(&reply::error(ErrorCode::NoReading)),
         },
         Command::Live(enabled) => {
             send(if enabled {
-                "OK: live on"
+                reply::OK_LIVE_ON
             } else {
-                "OK: live off"
+                reply::OK_LIVE_OFF
             });
             return BleOutcome::Live(enabled);
         }
         Command::OtaCheck => {
-            send("OK: ota check");
+            send(reply::OK_OTA_CHECK);
             return BleOutcome::OtaCheck;
         }
         Command::SetSsid(value) => {
             config.ssid = value;
-            send(&format!("OK: SSID set to {}", config.ssid));
+            send(&reply::ok_set(command::SSID, &config.ssid));
         }
         Command::SetPassword(value) => {
             config.password = value;
-            send("OK: password set");
+            send(reply::OK_PASSWORD_SET);
         }
         Command::SetLatitude(value) => {
             config.lat = value;
-            send(&format!("OK: LAT set to {:.6}", config.lat));
+            send(&reply::ok_set(command::LAT, format!("{:.6}", config.lat)));
         }
         Command::SetLongitude(value) => {
             config.lon = value;
-            send(&format!("OK: LON set to {:.6}", config.lon));
+            send(&reply::ok_set(command::LON, format!("{:.6}", config.lon)));
         }
         Command::SetDeviceId(value) => {
             config.device_id = value;
-            send(&format!("OK: DEVID set to {}", config.device_id));
+            send(&reply::ok_set(command::DEVID, &config.device_id));
         }
         Command::SetDeviceKey(value) => {
             config.device_key = value;
-            send("OK: device key set");
+            send(reply::OK_DEVICE_KEY_SET);
         }
         Command::Save => {
-            send("SAVE_BEGIN");
+            send(reply::SAVE_BEGIN);
             let mut saved = false;
             match store.save(config) {
                 Ok(()) => {
                     saved = true;
-                    send("WIFI_CONNECTING");
+                    send(reply::WIFI_CONNECTING);
                     match wifi.connect(config) {
                         Ok(true) => {
-                            send("SAVE_OK");
-                            send(&format!(
-                                "IP:{}",
-                                wifi.status().ip.as_deref().unwrap_or("0.0.0.0")
+                            send(reply::SAVE_OK);
+                            send(&reply::field(
+                                reply::IP,
+                                wifi.status().ip.as_deref().unwrap_or(reply::NO_IP),
                             ));
                         }
-                        _ => send("SAVE_FAILED:WIFI"),
+                        _ => send(&reply::field(reply::SAVE_FAILED, reply::FAILED_WIFI)),
                     }
                 }
                 Err(error) => {
                     log::error!("Config save failed: {error:?}");
-                    send("SAVE_FAILED:STORAGE");
+                    send(&reply::field(reply::SAVE_FAILED, reply::FAILED_STORAGE));
                 }
             }
-            send("SAVE_END");
+            send(reply::SAVE_END);
             if saved {
                 return BleOutcome::Saved;
             }
         }
         Command::Load => {
-            send("LOAD_BEGIN");
-            send(&format!("SSID:{}", config.ssid));
-            send(&format!(
-                "PASS_SET:{}",
-                u8::from(!config.password.is_empty())
+            send(reply::LOAD_BEGIN);
+            send(&reply::field(reply::SSID, &config.ssid));
+            send(&reply::flag(reply::PASS_SET, !config.password.is_empty()));
+            send(&reply::field(reply::LAT, format!("{:.6}", config.lat)));
+            send(&reply::field(reply::LON, format!("{:.6}", config.lon)));
+            send(&reply::field(reply::DEVID, &config.device_id));
+            send(&reply::flag(
+                reply::DEVKEY_SET,
+                !config.device_key.is_empty(),
             ));
-            send(&format!("LAT:{:.6}", config.lat));
-            send(&format!("LON:{:.6}", config.lon));
-            send(&format!("DEVID:{}", config.device_id));
-            send(&format!(
-                "DEVKEY_SET:{}",
-                u8::from(!config.device_key.is_empty())
-            ));
-            send("LOAD_END");
+            send(reply::LOAD_END);
         }
         Command::Clear => match store.clear() {
             Ok(()) => {
                 *config = DeviceConfig::default();
-                send("CLEARED all stored config");
+                send(reply::CLEARED);
                 return BleOutcome::Cleared;
             }
             Err(error) => {
                 log::error!("Config clear failed: {error:?}");
-                send("ERROR:STORAGE");
+                send(&reply::error(ErrorCode::Storage));
             }
         },
-        Command::ProtocolError(FrameError::TooLong) => send("ERROR:COMMAND_TOO_LONG"),
-        Command::ProtocolError(FrameError::Utf8) => send("ERROR:INVALID_UTF8"),
-        Command::Invalid(name) => send(&format!("ERROR:INVALID_{name}")),
-        Command::Unknown => send("ERROR:UNKNOWN_COMMAND"),
+        Command::ProtocolError(FrameError::TooLong) => {
+            send(&reply::error(ErrorCode::CommandTooLong))
+        }
+        Command::ProtocolError(FrameError::Utf8) => send(&reply::error(ErrorCode::InvalidUtf8)),
+        Command::Invalid(code) => send(&reply::error(code)),
+        Command::Unknown => send(&reply::error(ErrorCode::UnknownCommand)),
     }
     BleOutcome::Nothing
 }

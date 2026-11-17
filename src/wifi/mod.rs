@@ -1,4 +1,4 @@
-use crate::config::DeviceConfig;
+use crate::{ble::reply, config::DeviceConfig};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WifiStatus {
@@ -33,12 +33,12 @@ pub const SCAN_LIMIT: usize = 15;
 
 impl WifiNetwork {
     pub fn ble_line(&self) -> String {
-        format!(
-            "NET:{},{},{}",
-            self.rssi,
-            if self.secured { "secured" } else { "open" },
-            self.ssid
-        )
+        let security = if self.secured {
+            reply::SECURED
+        } else {
+            reply::OPEN
+        };
+        reply::list(reply::NET, &[&self.rssi, &security, &self.ssid])
     }
 }
 
