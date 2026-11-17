@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use esp_idf_svc::{
     hal::{
@@ -37,22 +40,44 @@ pub struct Pms5003 {
     /// SET pin: high (or floating) runs the fan and laser, low puts them to
     /// sleep (`docs/datasheets/`, page 4).
     set: PinDriver<'static, Output>,
+    /// RESET pin: held high; low resets the sensor (the pin table in
+    /// `docs/datasheets/`). Boards that leave it unwired are unaffected.
+    reset: PinDriver<'static, Output>,
     framer: Pms5003Framer,
 }
 
+/// How long RESET is held low. The manual gives no minimum, so this is a
+/// generous pulse for a 3.3 V TTL input.
+const RESET_PULSE: Duration = Duration::from_millis(100);
+
 impl Pms5003 {
-    /// Takes the sensor's UART and SET pin and leaves the sensor running.
+    /// Takes the sensor's UART, SET and RESET pins and leaves the sensor
+    /// running.
     pub fn new(
         uart: UartDriver<'static>,
         set: PinDriver<'static, Output>,
+        reset: PinDriver<'static, Output>,
     ) -> Result<Self, SensorError> {
         let mut sensor = Self {
             uart,
             set,
+            reset,
             framer: Pms5003Framer::default(),
         };
+        sensor.reset.set_high().map_err(|_| SensorError::Bus)?;
         sensor.set.set_high().map_err(|_| SensorError::Bus)?;
         Ok(sensor)
+    }
+
+    /// Pulses RESET low to restart a sensor that has stopped sending frames.
+    /// Blocks for [`RESET_PULSE`]. SET is untouched, so a sleeping sensor
+    /// stays asleep.
+    pub fn reset(&mut self) -> Result<(), SensorError> {
+        self.reset.set_low().map_err(|_| SensorError::Bus)?;
+        std::thread::sleep(RESET_PULSE);
+        self.reset.set_high().map_err(|_| SensorError::Bus)?;
+        self.framer = Pms5003Framer::default();
+        Ok(())
     }
 
     /// Stops the fan and laser.
