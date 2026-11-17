@@ -306,7 +306,10 @@ fn main() -> anyhow::Result<()> {
                     // Don't keep showing a reading from an earlier burst.
                     latest_pm = None;
                     pms_silent = true;
-                    log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst");
+                    log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst, resetting it");
+                    if let Err(error) = pms5003.reset() {
+                        log::warn!("PMS5003 reset failed: {error:?}");
+                    }
                 }
                 burst_frames = 0;
             }

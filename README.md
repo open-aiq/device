@@ -22,10 +22,10 @@ and active-low buttons with internal pull-ups.
 | PMS5003 | sensor TX -> ESP RX | 17 |
 | PMS5003 | sensor RX <- ESP TX | 18 |
 | PMS5003 | SET: high runs, low sleeps | 8 |
-| PMS5003 | RESET (pulled up on the board, not driven yet) | 16 |
+| PMS5003 | RESET: held high, pulsed low to restart a silent sensor | 16 |
 | Button | Right, active-low | 15 |
 | Button | Left, active-low | 6 |
-| Button | Pair, active-low (not read yet) | 7 |
+| Button | Pair, active-low (hold 3 s to pair) | 7 |
 | Status LED | WS2812 data (v1.0 devkit, SMT board / v1.1 devkit) | 48 / 38 |
 
 These match the Proto2 carrier board (rev B and later). Older breadboard builds used SDA 8,
@@ -57,8 +57,9 @@ and humidity within a second or so.
 
 So the fan and laser run 60 s in every 5 minutes. Uploads only go out while
 the sensor rests, so a burst is never split. While it rests, the screen keeps
-the last burst's PM. If a burst brings no frames, PM shows as missing and a
-`sensor` log event is recorded.
+the last burst's PM. If a burst brings no frames, PM shows as missing, a
+`sensor` log event is recorded, and the firmware pulses RESET low for 100 ms to
+restart the sensor before its next burst.
 
 The manufacturer's manual is in [`docs/datasheets/`](docs/datasheets/), and
 [The particle sensor](https://docs.air-iq.net/device/particle-sensor/) on the
@@ -191,7 +192,7 @@ in for the physical buttons. With `make monitor` open, type a line and press Ent
 
 | Line | Same as |
 | --- | --- |
-| `BTN:PAIR` | Holding both buttons for 3 s (opens pairing mode) |
+| `BTN:PAIR` | Holding the pair button, or both screen buttons, for 3 s (opens pairing mode) |
 | `BTN:LEFT` / `BTN:RIGHT` | Left / right button |
 | `BTN:HELP` | Prints the list |
 
@@ -211,8 +212,9 @@ Service:
 
 ### Pairing mode and security
 
-BLE is **off by default**. Hold both buttons for 3 seconds (or type `BTN:PAIR`)
-to start advertising for 5 minutes. The OLED shows `PAIRING` and a countdown.
+BLE is **off by default**. Hold the pair button for 3 seconds to start
+advertising for 5 minutes. Boards without one (like a breadboard build) can
+hold left and right together instead, or type `BTN:PAIR`. The OLED shows `PAIRING` and a countdown.
 
 - **Authenticated pairing.** RX and TX require an encrypted, MITM-authenticated
   link: LE Secure Connections with passkey entry, using IO capability

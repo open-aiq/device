@@ -44,16 +44,18 @@ impl Board {
             &uart_config,
         )?;
 
-        // PMS5003 SET: driven high to run, low to sleep. RESET (GPIO 16) is left alone.
+        // PMS5003 SET: driven high to run, low to sleep. RESET: held high,
+        // pulsed low to restart a sensor that stops sending frames.
         let pms_set = PinDriver::output(pins.gpio8)?;
-        let pms5003 = Pms5003::new(uart, pms_set)
-            .map_err(|error| anyhow::anyhow!("PMS5003 SET pin: {error:?}"))?;
+        let pms_reset = PinDriver::output(pins.gpio16)?;
+        let pms5003 = Pms5003::new(uart, pms_set, pms_reset)
+            .map_err(|error| anyhow::anyhow!("PMS5003 SET/RESET pins: {error:?}"))?;
 
         Ok(Self {
             shared_i2c,
             pms5003,
-            // Right, left. The pair button on GPIO 7 isn't read yet.
-            buttons: EspButtons::new(pins.gpio15, pins.gpio6)?,
+            // Right, left, pair.
+            buttons: EspButtons::new(pins.gpio15, pins.gpio6, pins.gpio7)?,
             led,
         })
     }
