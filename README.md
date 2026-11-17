@@ -25,6 +25,7 @@ and active-low buttons with internal pull-ups.
 | Button | Right, active-low | 15 |
 | Button | Left, active-low | 6 |
 | Button | Pair, active-low (not read yet) | 7 |
+| Status LED | WS2812 data | 48 |
 
 These match the Proto2 rev B carrier board. Older breadboard builds used SDA 8,
 SCL 9, sensor TX 18, sensor RX 17, and buttons 4 (right) and 5 (left).
@@ -58,6 +59,47 @@ the last burst's PM. If a burst brings no frames, PM shows as missing and a
 The manufacturer's manual is in [`docs/datasheets/`](docs/datasheets/), and
 [The particle sensor](https://docs.air-iq.net/device/particle-sensor/) on the
 docs site explains why we chose this timing, with sources.
+
+## Status LED
+
+The RGB LED on GPIO 48 is a diagnostics light. It shows what the board is
+doing when you can't see the serial log, or when the screen itself is the
+problem. It's the onboard LED on the ESP32-S3-DevKitC-1 v1.0 and D1 on the SMT
+board. (DevKitC-1 v1.1 moved its LED to GPIO 38, so it stays dark there.)
+
+It's kept dim on purpose, about 10% brightness. A background thread redraws it
+about 30 times a second, so it keeps going during WiFi connects, uploads and
+OTA downloads. The logic and its tests are in [`src/led/mod.rs`](src/led/mod.rs).
+
+Only one pattern shows at a time. Higher rows win:
+
+| Pattern | Meaning |
+| --- | --- |
+| White fade-in | Booting |
+| Amber, slow breathing | Downloading or installing an update |
+| Two green or two red flashes | Pairing worked, or didn't |
+| Steady blue | A phone is connected (or the passkey is on screen) |
+| Blue, slow breathing | Pairing window open, waiting for a phone |
+| Red blinks, then a pause | A fault; count the blinks (below) |
+| Yellow, 1 s on / 1 s off | Not provisioned yet |
+| Dim white, slow breathing | PMS5003 warming up; frames don't count yet |
+| Dim green, brighter tick per frame | PMS5003 sampling; each tick is a frame arriving |
+| Dark, tiny green blink every 5 s | PMS5003 resting; the firmware's alive and well |
+
+Fault codes. If there's more than one, you'll see the lowest:
+
+| Blinks | Fault | Where to look |
+| --- | --- | --- |
+| 1 | PMS5003 silent: a whole burst with no frames, or reads failing | Its cable, 5 V power and the TX/RX pins |
+| 2 | SHT30 missing, or its last read failed | I2C wiring and pull-ups |
+| 3 | OLED not found at boot | The OLED's cable; reboot after fixing it |
+| 4 | WiFi is set up but not connected | Router range, or the saved network |
+| 5 | The backend didn't accept the last upload | The `upload failed http=` log line |
+| 6 | A new update is running but not verified yet | Clears after the first good upload |
+
+If the PMS5003 is sampling but the green never ticks, frames aren't arriving.
+That usually points to its wiring, so you'll know before the burst ends and
+code 1 appears.
 
 ## Build and quality gates
 

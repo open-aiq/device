@@ -11,6 +11,7 @@ use esp_idf_svc::hal::{
 
 use crate::{
     buttons::esp::EspButtons,
+    led::esp::{self as led, LedHandle},
     sensors::esp::{Pms5003, SharedI2c},
 };
 
@@ -18,10 +19,15 @@ pub struct Board {
     pub shared_i2c: SharedI2c,
     pub pms5003: Pms5003,
     pub buttons: EspButtons,
+    pub led: LedHandle,
 }
 
 impl Board {
     pub fn new(pins: Pins, i2c0: I2C0<'static>, uart1: UART1<'static>) -> anyhow::Result<Self> {
+        // WS2812 status LED: D1 on the SMT board, and the onboard LED on
+        // DevKitC-1 v1.0. (DevKitC-1 v1.1 moved it to GPIO 38.)
+        let led = led::start(pins.gpio48);
+
         let i2c_config = I2cConfig::new().baudrate(KiloHertz(400).into());
         // Proto2 rev B pin map; it lets every trace fit on one copper layer.
         let i2c = I2cDriver::new(i2c0, pins.gpio5, pins.gpio4, &i2c_config)?;
@@ -47,6 +53,7 @@ impl Board {
             pms5003,
             // Right, left. The pair button on GPIO 7 isn't read yet.
             buttons: EspButtons::new(pins.gpio15, pins.gpio6)?,
+            led,
         })
     }
 }
