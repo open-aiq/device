@@ -26,9 +26,9 @@ and active-low buttons with internal pull-ups.
 | Button | Right, active-low | 15 |
 | Button | Left, active-low | 6 |
 | Button | Pair, active-low (not read yet) | 7 |
-| Status LED | WS2812 data | 48 |
+| Status LED | WS2812 data (v1.0 devkit, SMT board / v1.1 devkit) | 48 / 38 |
 
-These match the Proto2 rev B carrier board. Older breadboard builds used SDA 8,
+These match the Proto2 carrier board (rev B and later). Older breadboard builds used SDA 8,
 SCL 9, sensor TX 18, sensor RX 17, and buttons 4 (right) and 5 (left).
 
 Power the OLED and SHT30 at 3.3 V and ensure the shared I2C bus has pull-ups.
@@ -91,10 +91,12 @@ fail if anything is drawn off the screen or over something else.
 
 ## Status LED
 
-The RGB LED on GPIO 48 is a diagnostics light. It shows what the board is
+The RGB LED is a diagnostics light. It shows what the board is
 doing when you can't see the serial log, or when the screen itself is the
-problem. When all is well, its heartbeat also carries the AQI band's colour. It's the onboard LED on the ESP32-S3-DevKitC-1 v1.0 and D1 on the SMT
-board. (DevKitC-1 v1.1 moved its LED to GPIO 38, so it stays dark there.)
+problem. When all is well, its heartbeat also carries the AQI band's colour. It's the onboard LED on the ESP32-S3-DevKitC-1 and D1 on the SMT
+board. The firmware drives GPIO 48 (DevKitC-1 v1.0, SMT board) and GPIO 38
+(DevKitC-1 v1.1) with the same signal, so it lights on either devkit. Keep
+both pins free if you wire your own board.
 
 It's kept dim on purpose, about 10% brightness. A background thread redraws it
 about 30 times a second, so it keeps going during WiFi connects, uploads and

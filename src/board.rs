@@ -24,12 +24,13 @@ pub struct Board {
 
 impl Board {
     pub fn new(pins: Pins, i2c0: I2C0<'static>, uart1: UART1<'static>) -> anyhow::Result<Self> {
-        // WS2812 status LED: D1 on the SMT board, and the onboard LED on
-        // DevKitC-1 v1.0. (DevKitC-1 v1.1 moved it to GPIO 38.)
-        let led = led::start(pins.gpio48);
+        // WS2812 status LED: D1 on the SMT board and the onboard LED on
+        // DevKitC-1 v1.0 use GPIO 48; DevKitC-1 v1.1 moved it to GPIO 38.
+        // Both get the same frames, and neither pin is used for anything else.
+        let led = led::start(pins.gpio48, pins.gpio38);
 
         let i2c_config = I2cConfig::new().baudrate(KiloHertz(400).into());
-        // Proto2 rev B pin map; it lets every trace fit on one copper layer.
+        // Proto2 pin map (rev B and later); it lets every trace fit on one copper layer.
         let i2c = I2cDriver::new(i2c0, pins.gpio5, pins.gpio4, &i2c_config)?;
         let shared_i2c = SharedI2c(Arc::new(Mutex::new(i2c)));
 
