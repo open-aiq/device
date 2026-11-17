@@ -19,19 +19,18 @@ pub struct Aggregator {
 }
 
 impl Aggregator {
-    pub fn add(&mut self, readings: &SensorReadings) {
-        if let Some(pm) = &readings.pm {
-            self.pm_count += 1;
-            self.pm1_sum += f64::from(pm.pm1_0);
-            self.pm25_sum += f64::from(pm.pm2_5);
-            self.pm10_sum += f64::from(pm.pm10_0);
-        }
-        if let Some(climate) = &readings.climate {
-            self.climate_count += 1;
-            self.temperature_sum += f64::from(climate.temperature_c);
-            self.humidity_sum += f64::from(climate.humidity);
-            self.heat_index_sum += f64::from(climate.heat_index_c);
-        }
+    pub fn add_pm(&mut self, pm: &PmReading) {
+        self.pm_count += 1;
+        self.pm1_sum += f64::from(pm.pm1_0);
+        self.pm25_sum += f64::from(pm.pm2_5);
+        self.pm10_sum += f64::from(pm.pm10_0);
+    }
+
+    pub fn add_climate(&mut self, climate: &ClimateReading) {
+        self.climate_count += 1;
+        self.temperature_sum += f64::from(climate.temperature_c);
+        self.humidity_sum += f64::from(climate.humidity);
+        self.heat_index_sum += f64::from(climate.heat_index_c);
     }
 
     pub fn complete(&self) -> bool {
@@ -216,13 +215,29 @@ mod tests {
     #[test]
     fn averages_and_resets() {
         let mut aggregator = Aggregator::default();
-        aggregator.add(&sample(10, 20.0));
-        aggregator.add(&sample(20, 30.0));
+        for readings in [sample(10, 20.0), sample(20, 30.0)] {
+            aggregator.add_pm(readings.pm.as_ref().unwrap());
+            aggregator.add_climate(readings.climate.as_ref().unwrap());
+        }
         let mean = aggregator.mean().unwrap();
         assert_eq!(mean.pm.unwrap().pm2_5, 15);
         assert_eq!(mean.climate.unwrap().temperature_c, 25.0);
         aggregator.reset();
         assert!(!aggregator.complete());
+    }
+
+    #[test]
+    fn averages_pm_and_climate_counted_separately() {
+        let mut aggregator = Aggregator::default();
+        let only = sample(0, 21.0);
+        aggregator.add_climate(only.climate.as_ref().unwrap());
+        assert!(!aggregator.complete(), "needs at least one PM frame");
+        for pm25 in [10, 20, 30] {
+            aggregator.add_pm(sample(pm25, 0.0).pm.as_ref().unwrap());
+        }
+        let mean = aggregator.mean().unwrap();
+        assert_eq!(mean.pm.unwrap().pm2_5, 20);
+        assert_eq!(mean.climate.unwrap().temperature_c, 21.0);
     }
 
     #[test]

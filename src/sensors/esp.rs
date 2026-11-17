@@ -1,8 +1,16 @@
 use std::sync::{Arc, Mutex};
 
-use esp_idf_svc::hal::{delay::BLOCK, i2c::I2cDriver, uart::UartDriver};
+use esp_idf_svc::{
+    hal::{
+        delay::{BLOCK, NON_BLOCK},
+        gpio::{Output, PinDriver},
+        i2c::I2cDriver,
+        uart::UartDriver,
+    },
+    sys::ESP_ERR_TIMEOUT,
+};
 
-use crate::sensors::{parse_pms5003_frame, I2cBus, PmReading, SensorError};
+use crate::sensors::{I2cBus, PmReading, Pms5003Framer, SensorError, PMS5003_FRAME_LEN};
 
 #[derive(Clone)]
 pub struct SharedI2c(pub Arc<Mutex<I2cDriver<'static>>>);
@@ -26,34 +34,54 @@ impl I2cBus for SharedI2c {
 
 pub struct Pms5003 {
     uart: UartDriver<'static>,
-    buffer: Vec<u8>,
+    /// SET pin: high (or floating) runs the fan and laser, low puts them to
+    /// sleep (`docs/datasheets/`, page 4).
+    set: PinDriver<'static, Output>,
+    framer: Pms5003Framer,
 }
 
 impl Pms5003 {
-    pub fn new(uart: UartDriver<'static>) -> Self {
-        Self {
+    /// Takes the sensor's UART and SET pin and leaves the sensor running.
+    pub fn new(
+        uart: UartDriver<'static>,
+        set: PinDriver<'static, Output>,
+    ) -> Result<Self, SensorError> {
+        let mut sensor = Self {
             uart,
-            buffer: Vec::with_capacity(64),
-        }
+            set,
+            framer: Pms5003Framer::default(),
+        };
+        sensor.set.set_high().map_err(|_| SensorError::Bus)?;
+        Ok(sensor)
     }
 
-    pub fn read(&mut self) -> Result<PmReading, SensorError> {
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_secs(3) {
-            let mut bytes = [0u8; 32];
-            let count = self
-                .uart
-                .read(&mut bytes, 100)
-                .map_err(|_| SensorError::Bus)?;
-            self.buffer.extend_from_slice(&bytes[..count]);
-            while self.buffer.len() >= 2 && self.buffer[..2] != [0x42, 0x4d] {
-                self.buffer.remove(0);
-            }
-            if self.buffer.len() >= 32 {
-                let frame: Vec<u8> = self.buffer.drain(..32).collect();
-                return parse_pms5003_frame(&frame);
-            }
+    /// Stops the fan and laser.
+    pub fn sleep(&mut self) -> Result<(), SensorError> {
+        self.set.set_low().map_err(|_| SensorError::Bus)
+    }
+
+    /// Starts the fan and laser and forgets any bytes received before, so a
+    /// frame from before the sleep is never averaged. Readings need 30 s to
+    /// settle after this (`docs/datasheets/`, page 10).
+    pub fn wake(&mut self) -> Result<(), SensorError> {
+        self.set.set_high().map_err(|_| SensorError::Bus)?;
+        self.uart.clear_rx().map_err(|_| SensorError::Bus)?;
+        self.framer = Pms5003Framer::default();
+        Ok(())
+    }
+
+    /// Returns the next frame if a whole one has arrived, without waiting.
+    ///
+    /// In active mode the sensor sends a frame every 2.3 s, or every
+    /// 200–800 ms while the air is changing fast (`docs/datasheets/`, page 4).
+    pub fn poll(&mut self) -> Result<Option<PmReading>, SensorError> {
+        let mut bytes = [0u8; 2 * PMS5003_FRAME_LEN];
+        match self.uart.read(&mut bytes, NON_BLOCK) {
+            Ok(count) => self.framer.push(&bytes[..count]),
+            // A non-blocking read reports "no bytes waiting" as a timeout.
+            Err(error) if error.code() == ESP_ERR_TIMEOUT => {}
+            Err(_) => return Err(SensorError::Bus),
         }
-        Err(SensorError::Timeout)
+        self.framer.next_frame().transpose()
     }
 }
