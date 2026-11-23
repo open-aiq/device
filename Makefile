@@ -19,7 +19,7 @@ FLASH_ARGS   = --partition-table $(PARTITIONS) $(if $(BOOTLOADER),--bootloader $
 PORT ?=
 PORT_ARG := $(if $(PORT),--port $(PORT))
 
-.PHONY: help format\:fix format\:check test screens lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 image board\:info monitor release
+.PHONY: help format\:fix format\:check test screens lint\:check lint\:fix check\:sh1106 check\:ssd1306 verify build build\:sh1106 build\:ssd1306 flash flash\:sh1106 flash\:ssd1306 image board\:info monitor release clean
 
 ## help: Show available commands
 help:
@@ -107,6 +107,10 @@ board\:info:
 ## monitor: Open the serial monitor without flashing — make monitor [PORT=...]
 monitor:
 	$(ESPFLASH) monitor $(PORT_ARG)
+
+## clean: Delete build output, release files in dist/, and the ESP-IDF download in .embuild/ (the next build fetches it again)
+clean:
+	rm -rf target dist .embuild
 
 ## release: Verify, build, tag, and publish firmware — make release [version=major|minor|patch|x.y.z]
 release:
