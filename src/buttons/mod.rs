@@ -2,13 +2,12 @@
 pub enum ButtonEvent {
     Right,
     Left,
-    /// The pair button, or left and right together, held for
-    /// [`PAIR_HOLD_MS`]: open the BLE pairing window.
+    /// The pair button held for [`PAIR_HOLD_MS`]: open the BLE pairing
+    /// window.
     PairHold,
 }
 
-/// How long the pair button (or both screen buttons) must be held to enter
-/// BLE pairing mode.
+/// How long the pair button must be held to enter BLE pairing mode.
 pub const PAIR_HOLD_MS: u64 = 3_000;
 
 pub trait ButtonSource {
@@ -30,8 +29,8 @@ pub mod esp;
 pub mod serial;
 
 impl Debouncer {
-    /// Takes which buttons are down right now. Holding the pair button, or
-    /// left and right together, fires [`ButtonEvent::PairHold`] once per hold.
+    /// Takes which buttons are down right now. Holding the pair button fires
+    /// [`ButtonEvent::PairHold`] once per hold.
     pub fn update(
         &mut self,
         now_ms: u64,
@@ -39,7 +38,7 @@ impl Debouncer {
         left_down: bool,
         pair_down: bool,
     ) -> Option<ButtonEvent> {
-        if pair_down || (right_down && left_down) {
+        if pair_down {
             let since = *self.hold_since.get_or_insert(now_ms);
             // A screen button pressed during the hold shouldn't also change
             // the screen when it's let go.
@@ -145,38 +144,11 @@ mod tests {
     }
 
     #[test]
-    fn holding_both_buttons_fires_pair_hold_once() {
+    fn holding_both_screen_buttons_does_not_pair() {
         let mut d = Debouncer::default();
-        assert_eq!(d.update(0, true, true, false), None);
-        assert_eq!(d.update(2_999, true, true, false), None);
-        assert_eq!(
-            d.update(3_000, true, true, false),
-            Some(ButtonEvent::PairHold)
-        );
-        assert_eq!(
-            d.update(6_000, true, true, false),
-            None,
-            "fires once per hold"
-        );
-        assert_eq!(d.update(6_100, false, false, false), None);
-        assert_eq!(d.update(7_000, true, true, false), None);
-        assert_eq!(
-            d.update(10_000, true, true, false),
-            Some(ButtonEvent::PairHold)
-        );
-    }
-
-    #[test]
-    fn releasing_one_button_cancels_the_hold() {
-        let mut d = Debouncer::default();
-        d.update(0, true, true, false);
-        d.update(2_000, true, false, false);
-        assert_eq!(d.update(2_500, true, true, false), None);
+        assert_eq!(d.update(1_000, true, true, false), Some(ButtonEvent::Right));
         assert_eq!(d.update(5_000, true, true, false), None);
-        assert_eq!(
-            d.update(5_500, true, true, false),
-            Some(ButtonEvent::PairHold)
-        );
+        assert_eq!(d.update(10_000, true, true, false), None);
     }
 
     #[test]

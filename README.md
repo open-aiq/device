@@ -160,6 +160,9 @@ make format:fix
 make verify HOST_TARGET=aarch64-apple-darwin
 ```
 
+Need a fresh start? `make clean` deletes `target/`, `dist/` and `.embuild/`
+(about 8 GB). The next build downloads ESP-IDF again, so it takes a while.
+
 Use `HOST_TARGET=x86_64-unknown-linux-gnu` on Linux. `cargo fmt` rewrites source;
 CI uses `cargo fmt -- --check`. Clippy uses `-D warnings`. Host tests cover the
 portable library and separate ESP32-S3 jobs compile both OLED selections.
@@ -192,7 +195,7 @@ in for the physical buttons. With `make monitor` open, type a line and press Ent
 
 | Line | Same as |
 | --- | --- |
-| `BTN:PAIR` | Holding the pair button, or both screen buttons, for 3 s (opens pairing mode) |
+| `BTN:PAIR` | Holding the pair button for 3 s (opens pairing mode) |
 | `BTN:LEFT` / `BTN:RIGHT` | Left / right button |
 | `BTN:HELP` | Prints the list |
 
@@ -214,7 +217,7 @@ Service:
 
 BLE is **off by default**. Hold the pair button for 3 seconds to start
 advertising for 5 minutes. Boards without one (like a breadboard build) can
-hold left and right together instead, or type `BTN:PAIR`. The OLED shows `PAIRING` and a countdown.
+wire a button from GPIO 7 to GND, or type `BTN:PAIR`. The OLED shows `PAIRING` and a countdown.
 
 - **Authenticated pairing.** RX and TX require an encrypted, MITM-authenticated
   link: LE Secure Connections with passkey entry, using IO capability
