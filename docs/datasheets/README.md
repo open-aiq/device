@@ -26,14 +26,15 @@ same file.
 | Output interval, active mode | 2.3 s when the air is steady; 200–800 ms when it changes fast | 4 |
 | Response time | 1 s single, 10 s total | 3 |
 | Warm-up after wake | "at least 30 seconds after the sensor wakeup from the sleep mode" | 10 |
-| SET pin | high or floating runs the sensor, low puts it to sleep | 4 |
+| SET pin | high or floating runs the sensor, low puts it to sleep (not wired on our 4-pin cable) | 4 |
 | Current | 100 mA active, 200 µA standby | 3 |
 | MTTF | 3 years (test conditions not stated) | 3 |
 | Consistency error (PM2.5) | ±10 µg/m³ at 0–100 µg/m³, ±10 % at 100–500 µg/m³ | 3 |
 | Sleep cycling | endurance test toggles SET at 0.5 Hz for 72 h and passes | 9 |
 | Frame layout | data 1–3 are CF=1, data 4–6 are "under atmospheric environment"; the firmware reads data 4–6 | 13 |
 | UART | 9600 baud, 8N1, 32-byte frames starting `0x42 0x4d` | 13 |
-| Sleep command (not used; we use the SET pin) | `42 4d e4 00 00 01 73` sleep, `42 4d e4 00 01 01 74` wake | 15 |
+| UART commands | `0xe4` sleep (`00`) or wake (`01`), `0xe1` passive (`00`) or active (`01`) mode, `0xe2` read in passive mode; no reset command | 15 |
+| Sleep and wake commands | `42 4d e4 00 00 01 73` sleep, `42 4d e4 00 01 01 74` wake | 15 |
 
 Two caveats from the manual worth knowing: Plantower only promises consistency
 between its own sensors, not agreement with reference instruments (page 10),

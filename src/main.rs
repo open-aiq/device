@@ -306,10 +306,9 @@ fn main() -> anyhow::Result<()> {
                     // Don't keep showing a reading from an earlier burst.
                     latest_pm = None;
                     pms_silent = true;
-                    log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst, resetting it");
-                    if let Err(error) = pms5003.reset() {
-                        log::warn!("PMS5003 reset failed: {error:?}");
-                    }
+                    // There's no reset command, and no RESET wire on the
+                    // 4-pin cable; the next wake re-sends wake and active mode.
+                    log::warn!(target: "event::sensor", "PMS5003 sent no frames in a burst");
                 }
                 burst_frames = 0;
             }

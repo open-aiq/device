@@ -1,19 +1,17 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use esp_idf_svc::{
     hal::{
         delay::{BLOCK, NON_BLOCK},
-        gpio::{Output, PinDriver},
         i2c::I2cDriver,
         uart::UartDriver,
     },
     sys::ESP_ERR_TIMEOUT,
 };
 
-use crate::sensors::{I2cBus, PmReading, Pms5003Framer, SensorError, PMS5003_FRAME_LEN};
+use crate::sensors::{
+    I2cBus, PmReading, Pms5003Command, Pms5003Framer, SensorError, PMS5003_FRAME_LEN,
+};
 
 #[derive(Clone)]
 pub struct SharedI2c(pub Arc<Mutex<I2cDriver<'static>>>);
@@ -35,64 +33,50 @@ impl I2cBus for SharedI2c {
     }
 }
 
+/// The PMS5003 on a 4-wire cable (`TX RX VCC GND`). With no SET or RESET
+/// wire, it sleeps and wakes by UART command instead.
 pub struct Pms5003 {
     uart: UartDriver<'static>,
-    /// SET pin: high (or floating) runs the fan and laser, low puts them to
-    /// sleep (`docs/datasheets/`, page 4).
-    set: PinDriver<'static, Output>,
-    /// RESET pin: held high; low resets the sensor (the pin table in
-    /// `docs/datasheets/`). Boards that leave it unwired are unaffected.
-    reset: PinDriver<'static, Output>,
     framer: Pms5003Framer,
 }
 
-/// How long RESET is held low. The manual gives no minimum, so this is a
-/// generous pulse for a 3.3 V TTL input.
-const RESET_PULSE: Duration = Duration::from_millis(100);
-
 impl Pms5003 {
-    /// Takes the sensor's UART, SET and RESET pins and leaves the sensor
-    /// running.
-    pub fn new(
-        uart: UartDriver<'static>,
-        set: PinDriver<'static, Output>,
-        reset: PinDriver<'static, Output>,
-    ) -> Result<Self, SensorError> {
+    /// Takes the sensor's UART and makes sure it's awake and streaming. The
+    /// sensor keeps its power when only the ESP32 restarts (after an update,
+    /// say), so it may still be asleep from before.
+    pub fn new(uart: UartDriver<'static>) -> Result<Self, SensorError> {
         let mut sensor = Self {
             uart,
-            set,
-            reset,
             framer: Pms5003Framer::default(),
         };
-        sensor.reset.set_high().map_err(|_| SensorError::Bus)?;
-        sensor.set.set_high().map_err(|_| SensorError::Bus)?;
+        sensor.wake()?;
         Ok(sensor)
-    }
-
-    /// Pulses RESET low to restart a sensor that has stopped sending frames.
-    /// Blocks for [`RESET_PULSE`]. SET is untouched, so a sleeping sensor
-    /// stays asleep.
-    pub fn reset(&mut self) -> Result<(), SensorError> {
-        self.reset.set_low().map_err(|_| SensorError::Bus)?;
-        std::thread::sleep(RESET_PULSE);
-        self.reset.set_high().map_err(|_| SensorError::Bus)?;
-        self.framer = Pms5003Framer::default();
-        Ok(())
     }
 
     /// Stops the fan and laser.
     pub fn sleep(&mut self) -> Result<(), SensorError> {
-        self.set.set_low().map_err(|_| SensorError::Bus)
+        self.send(Pms5003Command::Sleep)
     }
 
-    /// Starts the fan and laser and forgets any bytes received before, so a
-    /// frame from before the sleep is never averaged. Readings need 30 s to
+    /// Starts the fan and laser, asks for active mode, and forgets any bytes
+    /// received before, so a frame from before the sleep is never averaged.
+    /// Asking for active mode every time also brings back a sensor that
+    /// somehow ended up in passive mode and went quiet. Readings need 30 s to
     /// settle after this (`docs/datasheets/`, page 10).
     pub fn wake(&mut self) -> Result<(), SensorError> {
-        self.set.set_high().map_err(|_| SensorError::Bus)?;
         self.uart.clear_rx().map_err(|_| SensorError::Bus)?;
         self.framer = Pms5003Framer::default();
-        Ok(())
+        self.send(Pms5003Command::Wake)?;
+        self.send(Pms5003Command::ActiveMode)
+    }
+
+    fn send(&mut self, command: Pms5003Command) -> Result<(), SensorError> {
+        let bytes = command.bytes();
+        let written = self.uart.write(&bytes).map_err(|_| SensorError::Bus)?;
+        if written != bytes.len() {
+            return Err(SensorError::Bus);
+        }
+        self.uart.wait_tx_done(BLOCK).map_err(|_| SensorError::Bus)
     }
 
     /// Returns the next frame if a whole one has arrived, without waiting.
