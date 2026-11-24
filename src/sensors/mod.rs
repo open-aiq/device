@@ -89,6 +89,43 @@ pub struct SensorReadings {
 /// Length of one PMS5003 data frame, from header to checksum.
 pub const PMS5003_FRAME_LEN: usize = 32;
 const PMS5003_HEADER: [u8; 2] = [0x42, 0x4d];
+/// Length of the short reply the sensor sends after a command: header,
+/// length (4), the command and its data, and a checksum. The manual doesn't
+/// describe it, but sensors send one after a mode change or a sleep.
+const PMS5003_REPLY_LEN: usize = 8;
+
+/// A command the PMS5003 accepts over its UART (`docs/datasheets/`,
+/// Appendix II, page 15). The manual lists three: read in passive mode
+/// (`0xe2`), change mode (`0xe1`) and sleep or wake (`0xe4`). There's no
+/// reset command; only the RESET pin or a power cycle restarts the sensor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pms5003Command {
+    /// Stops the fan and laser.
+    Sleep,
+    /// Starts the fan and laser again. Readings need 30 s to settle.
+    Wake,
+    /// Sends a frame on its own every 200 ms–2.3 s. The default at power-up.
+    ActiveMode,
+}
+
+impl Pms5003Command {
+    /// The seven bytes to send: `0x42 0x4d CMD DATAH DATAL`, then the sum of
+    /// those five bytes, high byte first.
+    pub fn bytes(self) -> [u8; 7] {
+        let (command, data) = match self {
+            Self::Sleep => (0xe4, 0x00),
+            Self::Wake => (0xe4, 0x01),
+            Self::ActiveMode => (0xe1, 0x01),
+        };
+        let body = [PMS5003_HEADER[0], PMS5003_HEADER[1], command, 0x00, data];
+        let [high, low] = body
+            .iter()
+            .map(|byte| u16::from(*byte))
+            .sum::<u16>()
+            .to_be_bytes();
+        [body[0], body[1], body[2], body[3], body[4], high, low]
+    }
+}
 
 /// Collects bytes from the PMS5003's UART and cuts them into frames.
 ///
@@ -105,27 +142,41 @@ impl Pms5003Framer {
     }
 
     /// Returns the next whole frame, or `None` until one has arrived.
+    /// Replies to commands are dropped, so they never count as readings.
     pub fn next_frame(&mut self) -> Option<Result<PmReading, SensorError>> {
-        match self
-            .buffer
-            .windows(PMS5003_HEADER.len())
-            .position(|pair| pair == PMS5003_HEADER)
-        {
-            Some(start) => {
-                self.buffer.drain(..start);
+        loop {
+            match self
+                .buffer
+                .windows(PMS5003_HEADER.len())
+                .position(|pair| pair == PMS5003_HEADER)
+            {
+                Some(start) => {
+                    self.buffer.drain(..start);
+                }
+                None => {
+                    // Keep a trailing first header byte; its partner may be next.
+                    let keep = usize::from(self.buffer.last() == Some(&PMS5003_HEADER[0]));
+                    let drop = self.buffer.len() - keep;
+                    self.buffer.drain(..drop);
+                }
             }
-            None => {
-                // Keep a trailing first header byte; its partner may be next.
-                let keep = usize::from(self.buffer.last() == Some(&PMS5003_HEADER[0]));
-                let drop = self.buffer.len() - keep;
-                self.buffer.drain(..drop);
+            if self.buffer.len() < 4 {
+                return None;
             }
+            let length = usize::from(u16::from_be_bytes([self.buffer[2], self.buffer[3]]));
+            if length == PMS5003_REPLY_LEN - 4 {
+                if self.buffer.len() < PMS5003_REPLY_LEN {
+                    return None;
+                }
+                self.buffer.drain(..PMS5003_REPLY_LEN);
+                continue;
+            }
+            if self.buffer.len() < PMS5003_FRAME_LEN {
+                return None;
+            }
+            let frame: Vec<u8> = self.buffer.drain(..PMS5003_FRAME_LEN).collect();
+            return Some(parse_pms5003_frame(&frame));
         }
-        if self.buffer.len() < PMS5003_FRAME_LEN {
-            return None;
-        }
-        let frame: Vec<u8> = self.buffer.drain(..PMS5003_FRAME_LEN).collect();
-        Some(parse_pms5003_frame(&frame))
     }
 }
 
@@ -334,5 +385,35 @@ mod tests {
         framer.push(&pms_frame(9));
         assert_eq!(framer.next_frame(), Some(Err(SensorError::Checksum)));
         assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 9);
+    }
+
+    #[test]
+    fn pms_commands_match_the_manual() {
+        // `docs/datasheets/README.md` quotes these two from page 15.
+        assert_eq!(
+            Pms5003Command::Sleep.bytes(),
+            [0x42, 0x4d, 0xe4, 0x00, 0x00, 0x01, 0x73]
+        );
+        assert_eq!(
+            Pms5003Command::Wake.bytes(),
+            [0x42, 0x4d, 0xe4, 0x00, 0x01, 0x01, 0x74]
+        );
+        assert_eq!(
+            Pms5003Command::ActiveMode.bytes(),
+            [0x42, 0x4d, 0xe1, 0x00, 0x01, 0x01, 0x71]
+        );
+    }
+
+    #[test]
+    fn framer_drops_command_replies() {
+        // The reply to "sleep", as sent by the sensor.
+        let reply = [0x42, 0x4d, 0x00, 0x04, 0xe4, 0x00, 0x01, 0x77];
+        let mut framer = Pms5003Framer::default();
+        framer.push(&reply[..5]);
+        assert_eq!(framer.next_frame(), None);
+        framer.push(&reply[5..]);
+        framer.push(&pms_frame(4));
+        assert_eq!(framer.next_frame().unwrap().unwrap().pm2_5, 4);
+        assert_eq!(framer.next_frame(), None);
     }
 }

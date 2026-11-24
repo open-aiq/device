@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use esp_idf_svc::hal::{
-    gpio::{self, PinDriver, Pins},
+    gpio::{self, Pins},
     i2c::{I2cConfig, I2cDriver, I2C0},
     uart::{config::Config as UartConfig, UartDriver, UART1},
     units::{Hertz, KiloHertz},
@@ -44,12 +44,11 @@ impl Board {
             &uart_config,
         )?;
 
-        // PMS5003 SET: driven high to run, low to sleep. RESET: held high,
-        // pulsed low to restart a sensor that stops sending frames.
-        let pms_set = PinDriver::output(pins.gpio8)?;
-        let pms_reset = PinDriver::output(pins.gpio16)?;
-        let pms5003 = Pms5003::new(uart, pms_set, pms_reset)
-            .map_err(|error| anyhow::anyhow!("PMS5003 SET/RESET pins: {error:?}"))?;
+        // The PMS5003 has a 4-wire cable (TX RX VCC GND), so SET and RESET
+        // aren't wired. A floating SET keeps it running (manual, page 4), and
+        // it sleeps and wakes by UART command. GPIO 8 and 16 are free.
+        let pms5003 = Pms5003::new(uart)
+            .map_err(|error| anyhow::anyhow!("PMS5003 wake command: {error:?}"))?;
 
         Ok(Self {
             shared_i2c,

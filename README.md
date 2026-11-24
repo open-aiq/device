@@ -21,15 +21,20 @@ and active-low buttons with internal pull-ups.
 | OLED + SHT30 | SCL | 4 |
 | PMS5003 | sensor TX -> ESP RX | 17 |
 | PMS5003 | sensor RX <- ESP TX | 18 |
-| PMS5003 | SET: high runs, low sleeps | 8 |
-| PMS5003 | RESET: held high, pulsed low to restart a silent sensor | 16 |
 | Button | Right, active-low | 15 |
 | Button | Left, active-low | 6 |
 | Button | Pair, active-low (hold 3 s to pair) | 7 |
 | Status LED | WS2812 data (v1.0 devkit, SMT board / v1.1 devkit) | 48 / 38 |
 
-These match the Proto2 carrier board (rev B and later). Older breadboard builds used SDA 8,
-SCL 9, sensor TX 18, sensor RX 17, and buttons 4 (right) and 5 (left).
+These match the Proto2 carrier board (rev B and later). Older breadboard
+builds used SDA 8, SCL 9, sensor TX 18, sensor RX 17, and buttons 4 (right)
+and 5 (left).
+
+The PMS5003 plugs in with a 4-wire cable (`TX RX VCC GND`), so its SET and
+RESET pins aren't wired. The manual says a floating SET keeps the sensor
+running (page 4), and the firmware puts it to sleep and wakes it with UART
+commands (see [Sampling](#sampling)). GPIO 8 and 16, which drove SET and
+RESET before, are free.
 
 Power the OLED and SHT30 at 3.3 V and ensure the shared I2C bus has pull-ups.
 The PMS5003 normally uses 5 V power; verify the module's UART logic levels.
@@ -58,8 +63,23 @@ and humidity within a second or so.
 So the fan and laser run 60 s in every 5 minutes. Uploads only go out while
 the sensor rests, so a burst is never split. While it rests, the screen keeps
 the last burst's PM. If a burst brings no frames, PM shows as missing, a
-`sensor` log event is recorded, and the firmware pulses RESET low for 100 ms to
-restart the sensor before its next burst.
+`sensor` log event is recorded. There's no reset command, so the firmware
+can't restart the sensor; it re-sends wake and active mode at every burst,
+which brings back one that went quiet in passive mode.
+
+The commands come from the manual's Appendix II (page 15). Each is seven
+bytes: `0x42 0x4d`, the command, two data bytes and a 16-bit sum of the rest.
+
+| Command | Bytes | When |
+| --- | --- | --- |
+| Sleep | `42 4d e4 00 00 01 73` | End of each burst |
+| Wake | `42 4d e4 00 01 01 74` | Boot and the start of each burst |
+| Active mode | `42 4d e1 00 01 01 71` | Right after each wake |
+
+The sensor answers some commands with a short 8-byte reply (length `4`).
+The manual doesn't mention it, so the framer drops these instead of reading
+them as a broken frame. The sensor keeps its power when only the ESP32
+restarts, which is why boot sends wake too.
 
 The manufacturer's manual is in [`docs/datasheets/`](docs/datasheets/), and
 [The particle sensor](https://docs.air-iq.net/device/particle-sensor/) on the
